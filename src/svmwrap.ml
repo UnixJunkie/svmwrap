@@ -22,10 +22,11 @@ module S = BatString
 
 let svm_type = 3 (* epsilon-SVR (cf. svm-train manpage) *)
 
-(* kernels we support; Polynomial is not supported because too many parameters *)
+(* kernels we support *)
 type kernel = Linear
             | RBF of float (* gamma *)
             | Sigmoid of float * float (* (gamma, r) *)
+(*          | Polynomial of float * float * float (\* not supported because too many parameters *\) *)
 
 let svm_train, svm_predict =
   (* names on Linux *)
@@ -106,27 +107,6 @@ let average_scores k sls =
 (* must be greater than 0 and less than 2^30 *)
 let rand_int_bound = (BatInt.pow 2 30) - 1
 
-let bagged_train_test_regr nprocs verbose seed_stream cmd e c k train' test =
-  if k = 1 then
-    (* be compatible with single_train_test_regr *)
-    single_train_test_regr verbose cmd e c train' test
-  else
-    (* bagging regressors *)
-    let a = A.of_list train' in
-    let n = A.length a in
-    let seeds =
-      L.init k (fun _i ->
-          RNG.int seed_stream rand_int_bound
-        ) in
-    let preds =
-      Parany.Parmap.parmap nprocs (fun seed ->
-          let rng = Random.State.make [|seed|] in
-          let train = A.to_list (Utls.array_bootstrap_sample rng n a) in
-          let acts, preds = single_train_test_regr verbose cmd e c train test in
-          L.combine acts preds
-        ) seeds in
-    L.split (average_scores k preds)
-
 (* liblinear wants first feature index=1 instead of 0 *)
 (* FBR: bug in case there are no features *)
 let increment_feat_indexes features =
@@ -146,6 +126,7 @@ let increment_feat_indexes features =
      (L.length feat_vals) features res; *)
   Buffer.contents buff
 
+(* FBR: update to libsvm-tools format *)
 (* liblinear line format:
    '-80.56 1:7 2:5 3:8 4:5 5:5 6:4 7:6 8:3 9:5 10:4 11:2'
    molenc line format:
@@ -205,21 +186,9 @@ let pairs_to_csv verbose do_classification pairs_fn =
        (atom_pairs_line_to_csv do_classification));
   tmp_csv_fn
 
-(* split a list into n parts (the last one might have less elements) *)
-let list_nparts n l =
-  let len = L.length l in
-  assert(n <= len);
-  let m = int_of_float (BatFloat.ceil ((float len) /. (float n))) in
-  let rec loop acc = function
-    | [] -> L.rev acc
-    | lst ->
-      let head, tail = L.takedrop m lst in
-      loop (head :: acc) tail in
-  loop [] l
-
 (* create folds of cross validation; each fold consists in (train, test) *)
 let cv_folds n l =
-  let test_sets = list_nparts n l in
+  let test_sets = Cpm.Utls.list_nparts n l in
   assert(n = L.length test_sets);
   let rec loop acc prev curr =
     match curr with
@@ -248,7 +217,7 @@ let log_R2 e c r2 =
    else if r2 < 0.5 then Log.warn
    else                  Log.info) "(e, C, R2) = %g %g %.3f" e c r2
 
-(* return the best parameter configuration (epsilon, C, k) found *)
+(* return the best parameter configuration (epsilon, C) found *)
 let optimize_regr verbose ncores es cs train test =
   let ecs = L.cartesian_product es cs in
   let e_c_r2s =
@@ -279,32 +248,16 @@ let optimize_regr_nfolds ncores verbose nfolds es cs train =
       ) ecs in
   best_r2 e_c_r2s
 
-let mol_of_lines lines =
-  L.mapi liblinear_line_to_FpMol lines
-
-let parmap2 ncores f2 l1 l2 =
-  Parany.Parmap.parmap ncores (fun (x, y) -> f2 x y) (L.combine l1 l2)
-
 let single_train_test_regr_nfolds verbose nfolds nprocs e c train =
   let train_tests = Cpm.Utls.cv_folds nfolds train in
-  let all_act_preds_points =
+  let all_act_preds =
     Parany.Parmap.parmap nprocs (fun (train', test') ->
         let acts, preds =
           single_train_test_regr verbose Discard e c train' test' in
-        ((acts, preds), [])
+        (acts, preds)
       ) train_tests in
-  let all_act_preds, points = L.split all_act_preds_points in
   let xs, ys = L.split all_act_preds in
-  (L.concat xs, L.concat ys, L.concat points)
-
-let dump_AD_points fn points' =
-  let points = A.of_list points' in
-  A.stable_sort (fun (d1,_,_) (d2,_,_) -> BatFloat.compare d1 d2) points;
-  LO.with_out_file fn (fun out ->
-      A.iter (fun (d, act, pred) ->
-          fprintf out "%f %f %f\n" d act pred
-        ) points
-    )
+  (L.concat xs, L.concat ys)
 
 (* instance-wise normalization *)
 let normalize_line l =
@@ -529,9 +482,7 @@ let main () =
               [--e-range <float>:<int>:<float>]: specific range for e\n  \
               (semantic=start:nsteps:stop)\n  \
               [--c-range <float,float,...>] explicit scan range for C \n  \
-              (example='0.01,0.02,0.03')\n  \
-              [--dump-AD <filename>]: dump AD points to file\n  \
-              (also requires --regr, --pairs and n>1)\n"
+              (example='0.01,0.02,0.03')\n"
        Sys.argv.(0);
      exit 1);
   let input_fn, was_compressed =
@@ -545,8 +496,6 @@ let main () =
   let will_load = L.mem "-l" args || L.mem "--load" args in
   let force = CLI.get_set_bool ["-f"] args in
   let pairs = CLI.get_set_bool ["--pairs"] args in
-  let ad_points_fn = CLI.get_string_def ["--dump-AD"] args "/dev/null" in
-  let compute_AD = ad_points_fn <> "/dev/null" in
   Utls.enforce (not (will_save && will_load))
     ("Svmwrap.main: cannot load and save at the same time");
   let model_cmd =
@@ -645,13 +594,10 @@ let main () =
                     single_train_test_regr
                       verbose model_cmd best_e best_c train test
                   else
-                    let actual', preds', ad_points =
+                    let actual', preds' =
                       single_train_test_regr_nfolds
                         verbose nfolds ncores best_e best_c
                         all_lines in
-                    (if compute_AD then
-                       dump_AD_points ad_points_fn ad_points
-                    );
                     (actual', preds') in
                 (* dump to a .act_pred file  *)
                 let act_preds = L.combine actual preds in
