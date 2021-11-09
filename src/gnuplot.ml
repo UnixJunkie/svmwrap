@@ -8,6 +8,7 @@ open Printf
 
 module Fn = Filename
 module L = BatList
+module LO = Line_oriented
 module Log = Dolog.Log
 module Stats = Cpm.RegrStats
 
@@ -20,13 +21,13 @@ let regr_plot title actual preds =
   let xy_min = min x_min y_min in
   let xy_max = max x_max y_max in
   let data_fn = Fn.temp_file ~temp_dir:"/tmp" "RFR_regr_data_" ".txt" in
-  Utls.with_out_file data_fn (fun out ->
+  LO.with_out_file data_fn (fun out ->
       L.iter (fun (x, y) ->
           fprintf out "%f %f\n" x y
         ) (L.combine actual preds)
     );
   let plot_fn = Fn.temp_file ~temp_dir:"/tmp" "RFR_regr_plot_" ".gpl" in
-  Utls.lines_to_file plot_fn
+  LO.lines_to_file plot_fn
     ["set xlabel 'actual'";
      "set ylabel 'predicted'";
      "set xtics out nomirror";
