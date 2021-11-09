@@ -19,18 +19,12 @@ module Opt = BatOption
 module RNG = BatRandom.State
 module S = BatString
 
-module SL = struct
-  type t = bool * float (* (label, pred_score) *)
-  let create (l, s) =
-    (l, s)
-  let get_score (_l, s) =
-    s
-  let get_label (l, _s) =
-    l
-end
+let svm_type = 3 (* epsilon-SVR (cf. svm-train manpage) *)
 
-module ROC = Cpm.MakeROC.Make(SL)
-module Perfs = Perf.Make(SL)
+(* kernels we support; Polynomial is not supported because too many parameters *)
+type kernel = Linear
+            | RBF of float (* gamma *)
+            | Sigmoid of float * float (* (gamma, r) *)
 
 let svm_train, svm_predict =
   (* names on Linux *)
@@ -83,55 +77,6 @@ let balanced_bag pairs rng lines =
 type model_command = Restore_from of Utls.filename
                    | Save_into of Utls.filename
                    | Discard
-
-let single_train_test verbose pairs cmd c w train test =
-  let quiet_command =
-    if verbose then ""
-    else "2>&1 > /dev/null" in
-  (* train *)
-  let train_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_train_" ".txt" in
-  Utls.lines_to_file train_fn train;
-  let replaced, model_fn =
-    (* liblinear places the model in the current working dir... *)
-    S.replace ~str:(train_fn ^ ".model") ~sub:"/tmp/" ~by:"" in
-  assert(replaced);
-  let w_str = if w <> 1.0 then sprintf " -w1 %g" w else "" in
-  Utls.run_command ~debug:verbose
-    (sprintf "%s -c %g%s -s 0 %s %s"
-       svm_train c w_str train_fn quiet_command);
-  (* test *)
-  let test_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_test_" ".txt" in
-  Utls.lines_to_file test_fn test;
-  let preds_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_preds_" ".txt" in
-  (* compute AUC on test set *)
-  Utls.run_command ~debug:verbose
-    (* '-b 1' forces probabilist predictions instead of raw scores *)
-    (sprintf "%s -b 1 %s %s %s %s"
-       svm_predict test_fn model_fn preds_fn quiet_command);
-  (* extract true labels *)
-  let true_labels = L.map (is_active pairs) test in
-  (* extact predicted scores *)
-  let pred_lines = Utls.lines_of_file preds_fn in
-  begin match cmd with
-    | Restore_from _ -> assert(false) (* not dealt with here *)
-    | Discard ->
-      if not verbose then
-        L.iter (Sys.remove) [train_fn; test_fn; preds_fn; model_fn]
-    | Save_into models_fn ->
-      (Utls.run_command (sprintf "echo %s >> %s" model_fn models_fn);
-       if not verbose then
-         L.iter (Sys.remove) [train_fn; test_fn; preds_fn])
-  end;
-  match pred_lines with
-  | header :: preds ->
-    begin
-      (if header <> "labels 1 -1" then
-         Log.warn "Svmwrap.single_train_test: wrong header in preds_fn: %s"
-           header);
-      let pred_scores = L.map pred_score_of_pred_line preds in
-      L.map SL.create (L.combine true_labels pred_scores)
-    end
-  | _ -> assert(false)
 
 let single_train_test_regr verbose cmd e c train test =
   let quiet_option = if not verbose then "-q" else "" in
@@ -289,18 +234,6 @@ let pairs_to_csv verbose do_classification pairs_fn =
        (atom_pairs_line_to_csv do_classification));
   tmp_csv_fn
 
-let train_test ncores verbose pairs cmd rng c w k train test =
-  if k <= 1 then
-    (* we don't use bagging then *)
-    single_train_test verbose pairs cmd c w train test
-  else (* k > 1 *)
-    let bags = L.init k (fun _ -> balanced_bag pairs rng train) in
-    let k_score_labels =
-      Parany.Parmap.parmap ncores (fun bag ->
-          single_train_test verbose pairs cmd c w bag test
-        ) bags in
-    average_scores k k_score_labels
-
 (* split a list into n parts (the last one might have less elements) *)
 let list_nparts n l =
   let len = L.length l in
@@ -327,37 +260,6 @@ let cv_folds n l =
       let acc' = train_test :: acc in
       loop acc' prev' xs in
   loop [] [] test_sets
-
-let nfolds_train_test ncores verbose pairs cmd rng c w k n dataset =
-  assert(n > 1);
-  L.flatten
-    (L.map (fun (train, test) ->
-         train_test ncores verbose pairs cmd rng c w k train test
-       ) (cv_folds n dataset))
-
-let train_test_maybe_nfolds
-    ncores nfolds verbose model_cmd rng c' w' k' train test =
-  if nfolds <= 1 then
-    train_test ncores verbose false model_cmd rng c' w' k' train test
-  else (* nfolds > 1 *)
-    nfolds_train_test ncores verbose false model_cmd rng c' w' k' nfolds
-      (L.rev_append train test)
-
-(* find the best threshold to do classification instead of ranking;
-   by maximizing MCC over the threshold's range *)
-let mcc_scan_proper ncores score_labels =
-  let nsteps = 1001 in
-  let thresholds = L.frange 0.0 `To 1.0 nsteps in
-  let mccs =
-    Parany.Parmap.parmap ncores (fun t ->
-        let mcc = ROC.mcc t score_labels in
-        (t, mcc)
-      ) thresholds in
-  let (_tmin, _mcc_min), (threshold, mcc_max) =
-    L.min_max ~cmp:(fun (_t1, mcc1) (_t2, mcc2) ->
-        BatFloat.compare (mcc1) (mcc2)
-      ) mccs in
-  (threshold, mcc_max)
 
 (* find best (e, C) configuration by R2 maximization *)
 let best_r2 l =
