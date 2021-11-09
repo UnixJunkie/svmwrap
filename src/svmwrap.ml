@@ -96,12 +96,15 @@ let single_train_test_regr verbose cmd kernel e c train test =
        nb_preds test_card);
   begin match cmd with
     | Restore_from _ -> assert(false) (* not dealt with here *)
-    | Discard -> L.iter (Sys.remove) [train_fn; test_fn; preds_fn; model_fn]
+    | Discard ->
+      (if not verbose then
+         L.iter (Sys.remove) [train_fn; test_fn; preds_fn; model_fn])
     | Save_into out_fn ->
       begin
         Sys.rename model_fn out_fn;
         Log.info "model saved to: %s" out_fn;
-        L.iter (Sys.remove) [train_fn; test_fn; preds_fn]
+        (if not verbose then
+           L.iter (Sys.remove) [train_fn; test_fn; preds_fn])
       end
   end;
   let pred_values = L.map float_of_string pred_lines in
@@ -453,7 +456,8 @@ let main () =
               [--iwn]: turn ON instance-wise-normalization\n  \
               [--no-plot]: no gnuplot\n  \
               [{-n|--NxCV} <int>]: folds of cross validation\n  \
-              [-q]: quiet liblinear\n  \
+              [-q]: quiet\n  \
+              [-v|--verbose]: equivalent to not specifying -q\n  \
               [--seed <int>]: fix random seed\n  \
               [-p <float>]: training set portion (in [0.0:1.0])\n  \
               [--pairs]: read from .AP files (atom pairs; \
@@ -512,6 +516,7 @@ let main () =
   let e_range_str = CLI.get_string_opt ["--e-range"] args in
   let c_range_str = CLI.get_string_opt ["--c-range"] args in
   let quiet = CLI.get_set_bool ["-q"] args in
+  let verbose = (not quiet) || (CLI.get_set_bool ["-v";"--verbose"] args) in
   let instance_wise_norm = CLI.get_set_bool ["--iwn"] args in
   Utls.enforce (not (L.mem "-e" args && L.mem "--scan-e" args))
     "Svmwrap: -e and --scan-e are exclusive";
@@ -520,7 +525,6 @@ let main () =
   let no_gnuplot = CLI.get_set_bool ["--no-plot"] args in
   CLI.finalize (); (* ------------------------------------------------------ *)
   let kernel = Linear in (* default kernel *)
-  let verbose = not quiet in
   (* scan C? *)
   let cs = match fixed_c with
     | Some c -> [c]
