@@ -32,18 +32,14 @@ end
 module ROC = Cpm.MakeROC.Make(SL)
 module Perfs = Perf.Make(SL)
 
-let liblin_train, liblin_predict =
-  if Utls.os_is_Mac_OS () then
-    (* unspecific names chosen by brew liblinear packagers... *)
-    ("train", "predict")
-  else
-    (* better names on Linux *)
-    ("liblinear-train", "liblinear-predict")
+let svm_train, svm_predict =
+  (* names on Linux *)
+  ("svm-train", "svm-predict")
 
 let pred_score_of_pred_line l =
   try Scanf.sscanf l "%d %f %f" (fun _label act_p _dec_p -> act_p)
   with exn ->
-    (Log.fatal "Linwrap.pred_score_of_pred_line: cannot parse: %s" l;
+    (Log.fatal "Svmwrap.pred_score_of_pred_line: cannot parse: %s" l;
      raise exn)
 
 let is_active pairs s =
@@ -61,14 +57,14 @@ let get_name_from_AP_line pairs l =
 let get_pIC50 pairs s =
   if pairs then
     try Scanf.sscanf s "%s@,%f,%s" (fun _name pIC50 _features -> pIC50)
-    with exn -> (Log.error "Linwrap.get_pIC50 pairs: cannot parse: %s" s;
+    with exn -> (Log.error "Svmwrap.get_pIC50 pairs: cannot parse: %s" s;
                  raise exn)
   else
     (* the sparse data file format for liblinear starts with the
      * target_float_val as the first field followed by
        idx:val space-separated FP values *)
     try Scanf.sscanf s "%f %s" (fun pIC50 _features -> pIC50)
-    with exn -> (Log.error "Linwrap.get_pIC50: cannot parse: %s" s;
+    with exn -> (Log.error "Svmwrap.get_pIC50: cannot parse: %s" s;
                  raise exn)
 
 let balanced_bag pairs rng lines =
@@ -93,7 +89,7 @@ let single_train_test verbose pairs cmd c w train test =
     if verbose then ""
     else "2>&1 > /dev/null" in
   (* train *)
-  let train_fn = Fn.temp_file ~temp_dir:"/tmp" "linwrap_train_" ".txt" in
+  let train_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_train_" ".txt" in
   Utls.lines_to_file train_fn train;
   let replaced, model_fn =
     (* liblinear places the model in the current working dir... *)
@@ -102,16 +98,16 @@ let single_train_test verbose pairs cmd c w train test =
   let w_str = if w <> 1.0 then sprintf " -w1 %g" w else "" in
   Utls.run_command ~debug:verbose
     (sprintf "%s -c %g%s -s 0 %s %s"
-       liblin_train c w_str train_fn quiet_command);
+       svm_train c w_str train_fn quiet_command);
   (* test *)
-  let test_fn = Fn.temp_file ~temp_dir:"/tmp" "linwrap_test_" ".txt" in
+  let test_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_test_" ".txt" in
   Utls.lines_to_file test_fn test;
-  let preds_fn = Fn.temp_file ~temp_dir:"/tmp" "linwrap_preds_" ".txt" in
+  let preds_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_preds_" ".txt" in
   (* compute AUC on test set *)
   Utls.run_command ~debug:verbose
     (* '-b 1' forces probabilist predictions instead of raw scores *)
     (sprintf "%s -b 1 %s %s %s %s"
-       liblin_predict test_fn model_fn preds_fn quiet_command);
+       svm_predict test_fn model_fn preds_fn quiet_command);
   (* extract true labels *)
   let true_labels = L.map (is_active pairs) test in
   (* extact predicted scores *)
@@ -130,7 +126,7 @@ let single_train_test verbose pairs cmd c w train test =
   | header :: preds ->
     begin
       (if header <> "labels 1 -1" then
-         Log.warn "Linwrap.single_train_test: wrong header in preds_fn: %s"
+         Log.warn "Svmwrap.single_train_test: wrong header in preds_fn: %s"
            header);
       let pred_scores = L.map pred_score_of_pred_line preds in
       L.map SL.create (L.combine true_labels pred_scores)
@@ -140,7 +136,7 @@ let single_train_test verbose pairs cmd c w train test =
 let single_train_test_regr verbose cmd e c train test =
   let quiet_option = if not verbose then "-q" else "" in
   (* train *)
-  let train_fn = Fn.temp_file ~temp_dir:"/tmp" "linwrap_train_" ".txt" in
+  let train_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_train_" ".txt" in
   Utls.lines_to_file train_fn train;
   let replaced, model_fn =
     (* liblinear places the model in the current working dir... *)
@@ -148,21 +144,21 @@ let single_train_test_regr verbose cmd e c train test =
   assert(replaced);
   Utls.run_command ~debug:verbose
     (sprintf "%s %s -s 11 -c %g -p %g %s %s"
-       liblin_train quiet_option c e train_fn model_fn);
+       svm_train quiet_option c e train_fn model_fn);
   (* test *)
-  let test_fn = Fn.temp_file ~temp_dir:"/tmp" "linwrap_test_" ".txt" in
+  let test_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_test_" ".txt" in
   Utls.lines_to_file test_fn test;
-  let preds_fn = Fn.temp_file ~temp_dir:"/tmp" "linwrap_preds_" ".txt" in
+  let preds_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_preds_" ".txt" in
   (* compute R2 on test set *)
   Utls.run_command ~debug:verbose
     (sprintf "%s %s %s %s %s"
-       liblin_predict quiet_option test_fn model_fn preds_fn);
+       svm_predict quiet_option test_fn model_fn preds_fn);
   let actual_values = L.map (get_pIC50 false) test in
   let pred_lines = Utls.lines_of_file preds_fn in
   let nb_preds = L.length pred_lines in
   let test_card = L.length test in
   Utls.enforce (nb_preds = test_card)
-    (sprintf "Linwrap.single_train_test_regr: |preds|=%d <> |test|=%d"
+    (sprintf "Svmwrap.single_train_test_regr: |preds|=%d <> |test|=%d"
        nb_preds test_card);
   begin match cmd with
     | Restore_from _ -> assert(false) (* not dealt with here *)
@@ -226,7 +222,7 @@ let increment_feat_indexes features =
                bprintf buff " %d:%d" (feat + 1) value
             )
       with exn ->
-        (Log.fatal "Linwrap.increment_feat_indexes: cannot parse '%s' in '%s'"
+        (Log.fatal "Svmwrap.increment_feat_indexes: cannot parse '%s' in '%s'"
            feat_val features;
          raise exn)
     ) feat_vals;
@@ -241,7 +237,7 @@ let increment_feat_indexes features =
 let liblinear_line_to_FpMol index l =
   let feat_vals = S.split_on_char ' ' l in
   match feat_vals with
-  | [] | [_] -> failwith ("Linwrap.liblinear_line_to_FpMol: " ^ l)
+  | [] | [_] -> failwith ("Svmwrap.liblinear_line_to_FpMol: " ^ l)
   | ic50 :: feat_vals ->
     let name = sprintf "mol%d" index in
     let buff = Buffer.create 1024 in
@@ -251,7 +247,7 @@ let liblinear_line_to_FpMol index l =
                  bprintf buff (if i = 0 then "[%d:%d" else ";%d:%d")
                    (feat - 1) value)
         with exn ->
-          (Log.fatal "Linwrap.liblinear_line_to_FpMol: cannot parse: %s"
+          (Log.fatal "Svmwrap.liblinear_line_to_FpMol: cannot parse: %s"
              feat_val;
            raise exn)
       ) feat_vals;
@@ -275,7 +271,7 @@ let atom_pairs_line_to_csv do_classification line =
     let features' =
       S.replace_chars semi_colon_to_space (S.chop ~l:1 ~r:1 features) in
     sprintf "%s%s" label_str (increment_feat_indexes features')
-  | _ -> failwith ("Linwrap.atom_pairs_line_to_csv: cannot parse: " ^ line)
+  | _ -> failwith ("Svmwrap.atom_pairs_line_to_csv: cannot parse: " ^ line)
 
 (* unit tests for atom_pairs_line_to_csv *)
 let () =
@@ -286,7 +282,7 @@ let () =
 
 let pairs_to_csv verbose do_classification pairs_fn =
   let tmp_csv_fn =
-    Fn.temp_file ~temp_dir:"/tmp" "linwrap_pairs2csv_" ".csv" in
+    Fn.temp_file ~temp_dir:"/tmp" "svmwrap_pairs2csv_" ".csv" in
   (if verbose then Log.info "--pairs -> tmp CSV: %s" tmp_csv_fn);
   Utls.lines_to_file tmp_csv_fn
     (Utls.map_on_lines_of_file pairs_fn
@@ -442,8 +438,8 @@ let dump_AD_points fn points' =
 let normalize_line l =
   let tokens = S.split_on_char ' ' l in
   match tokens with
-  | [] -> failwith "Linwrap.normalize_line: empty line"
-  | [_label] -> failwith ("Linwrap.normalize_line: no features: " ^ l)
+  | [] -> failwith "Svmwrap.normalize_line: empty line"
+  | [_label] -> failwith ("Svmwrap.normalize_line: no features: " ^ l)
   | label :: features ->
     let sum = ref 0 in
     let feat_vals =
@@ -475,12 +471,12 @@ let prepend_scores_by_names
   let tmp_csv_fn = pairs_to_csv verbose do_classification test_fn in
   Utls.run_command ~debug:verbose
     (sprintf "%s %s %s %s %s"
-       liblin_predict quiet_option tmp_csv_fn model_fn output_fn);
+       svm_predict quiet_option tmp_csv_fn model_fn output_fn);
   (* output_fn only holds floats now.
      the following prepend each score by the corresp. molecule name
      to reach the following line format:
      ^mol_name\tscore$ *)
-  let tmp_names_fn = Fn.temp_file ~temp_dir:"/tmp" "linwrap_" ".names" in
+  let tmp_names_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_" ".names" in
   (* extract mol. names: in *.AP files, this is the first field *)
   Utls.run_command ~debug:verbose
     (sprintf "cut -d',' -f1 %s > %s" test_fn tmp_names_fn);
@@ -498,7 +494,7 @@ let prod_predict_regr
   else
     Utls.run_command ~debug:verbose
       (sprintf "%s %s %s %s %s"
-         liblin_predict quiet_option test_fn model_fn output_fn)
+         svm_predict quiet_option test_fn model_fn output_fn)
 
 let count_active_decoys pairs fn =
   let n_total = Utls.file_nb_lines fn in
@@ -525,7 +521,7 @@ let decode_w_range pairs maybe_train_fn input_fn maybe_range_str =
         | Some train_fn -> count_active_decoys pairs train_fn
         | None -> count_active_decoys pairs input_fn in
       Utls.enforce (n_acts <= n_decs)
-        (sprintf "Linwrap.decode_w_range: n_acts (%d) > n_decs (%d)"
+        (sprintf "Svmwrap.decode_w_range: n_acts (%d) > n_decs (%d)"
            n_acts n_decs);
       let max_weight = (float n_decs) /. (float n_acts) in
       Log.info "max weight: %g" max_weight;
@@ -534,7 +530,7 @@ let decode_w_range pairs maybe_train_fn input_fn maybe_range_str =
   | Some s ->
     try Scanf.sscanf s "%f:%d:%f" (fun start nsteps stop ->
         L.frange start `To stop nsteps)
-    with exn -> (Log.fatal "Linwrap.decode_w_range: invalid string: %s"  s;
+    with exn -> (Log.fatal "Svmwrap.decode_w_range: invalid string: %s"  s;
                  raise exn)
 
 let decode_e_range maybe_range_str = match maybe_range_str with
@@ -544,7 +540,7 @@ let decode_e_range maybe_range_str = match maybe_range_str with
       Scanf.sscanf s "%f:%d:%f" (fun start nsteps stop ->
           Some (L.frange start `To stop nsteps)
         )
-    with exn -> (Log.fatal "Linwrap.decode_e_range: invalid string: %s"  s;
+    with exn -> (Log.fatal "Svmwrap.decode_e_range: invalid string: %s"  s;
                  raise exn)
 
 let decode_c_range (maybe_range_str: string option): float list =
@@ -584,10 +580,10 @@ let epsilon_range maybe_epsilon maybe_esteps maybe_es train =
   match (maybe_epsilon, maybe_esteps, maybe_es) with
   | (None, None, Some es) -> es
   | (_, _, Some _) ->
-    failwith "Linwrap.epsilon_range: (e or esteps) and --e-range"
+    failwith "Svmwrap.epsilon_range: (e or esteps) and --e-range"
   | (Some _, Some _, None) ->
-    failwith "Linwrap.epsilon_range: both e and esteps"
-  | (None, None, None) -> failwith "Linwrap.epsilon_range: no e and no esteps"
+    failwith "Svmwrap.epsilon_range: both e and esteps"
+  | (None, None, None) -> failwith "Svmwrap.epsilon_range: no e and no esteps"
   | (Some e, None, None) -> [e]
   | (None, Some nsteps, None) ->
     let train_pIC50s = L.map (get_pIC50 false) train in
@@ -689,14 +685,14 @@ let main () =
   let ad_points_fn = CLI.get_string_def ["--dump-AD"] args "/dev/null" in
   let compute_AD = ad_points_fn <> "/dev/null" in
   Utls.enforce (not (will_save && will_load))
-    ("Linwrap.main: cannot load and save at the same time");
+    ("Svmwrap.main: cannot load and save at the same time");
   let model_cmd =
     begin match CLI.get_string_opt ["-s"; "--save"] args with
       | Some fn ->
         let () =
           Utls.enforce
             (force || not (Sys.file_exists fn))
-            ("Linwrap: file already exists: " ^ fn) in
+            ("Svmwrap: file already exists: " ^ fn) in
         Save_into fn
       | None ->
         begin match CLI.get_string_opt ["-l"; "--load"] args with
@@ -724,7 +720,7 @@ let main () =
   let fixed_w = CLI.get_float_opt ["-w"] args in
   let instance_wise_norm = CLI.get_set_bool ["--iwn"] args in
   Utls.enforce (not (L.mem "-e" args && L.mem "--scan-e" args))
-    "Linwrap: -e and --scan-e are exclusive";
+    "Svmwrap: -e and --scan-e are exclusive";
   let maybe_epsilon = CLI.get_float_opt ["-e"] args in
   let maybe_esteps = CLI.get_int_opt ["--scan-e"] args in
   let do_regression =
@@ -833,7 +829,7 @@ let main () =
       | (Some _train_fn, Some _valid_fn, Some _test_fn) ->
         failwith "not implemented yet"
       | _ ->
-        failwith "Linwrap: --train, --valid and --test: \
+        failwith "Svmwrap: --train, --valid and --test: \
                   provide all three or none"
   end;
   if was_compressed then
