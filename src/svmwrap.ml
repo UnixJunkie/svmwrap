@@ -15,6 +15,7 @@ module Fn = Filename
 module FpMol = Molenc.FpMol
 module L = BatList
 module Log = Dolog.Log
+module LO = Line_oriented
 module Opt = BatOption
 module RNG = BatRandom.State
 module S = BatString
@@ -82,7 +83,7 @@ let single_train_test_regr verbose cmd e c train test =
   let quiet_option = if not verbose then "-q" else "" in
   (* train *)
   let train_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_train_" ".txt" in
-  Utls.lines_to_file train_fn train;
+  LO.lines_to_file train_fn train;
   let replaced, model_fn =
     (* liblinear places the model in the current working dir... *)
     S.replace ~str:(train_fn ^ ".model") ~sub:"/tmp/" ~by:"" in
@@ -92,14 +93,14 @@ let single_train_test_regr verbose cmd e c train test =
        svm_train quiet_option c e train_fn model_fn);
   (* test *)
   let test_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_test_" ".txt" in
-  Utls.lines_to_file test_fn test;
+  LO.lines_to_file test_fn test;
   let preds_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_preds_" ".txt" in
   (* compute R2 on test set *)
   Utls.run_command ~debug:verbose
     (sprintf "%s %s %s %s %s"
        svm_predict quiet_option test_fn model_fn preds_fn);
   let actual_values = L.map (get_pIC50 false) test in
-  let pred_lines = Utls.lines_of_file preds_fn in
+  let pred_lines = LO.lines_of_file preds_fn in
   let nb_preds = L.length pred_lines in
   let test_card = L.length test in
   Utls.enforce (nb_preds = test_card)
@@ -229,8 +230,8 @@ let pairs_to_csv verbose do_classification pairs_fn =
   let tmp_csv_fn =
     Fn.temp_file ~temp_dir:"/tmp" "svmwrap_pairs2csv_" ".csv" in
   (if verbose then Log.info "--pairs -> tmp CSV: %s" tmp_csv_fn);
-  Utls.lines_to_file tmp_csv_fn
-    (Utls.map_on_lines_of_file pairs_fn
+  LO.lines_to_file tmp_csv_fn
+    (LO.map pairs_fn
        (atom_pairs_line_to_csv do_classification));
   tmp_csv_fn
 
@@ -330,7 +331,7 @@ let single_train_test_regr_nfolds verbose nfolds nprocs e c train =
 let dump_AD_points fn points' =
   let points = A.of_list points' in
   A.stable_sort (fun (d1,_,_) (d2,_,_) -> BatFloat.compare d1 d2) points;
-  Utls.with_out_file fn (fun out ->
+  LO.with_out_file fn (fun out ->
       A.iter (fun (d, act, pred) ->
           fprintf out "%f %f %f\n" d act pred
         ) points
@@ -399,14 +400,14 @@ let prod_predict_regr
          svm_predict quiet_option test_fn model_fn output_fn)
 
 let count_active_decoys pairs fn =
-  let n_total = Utls.file_nb_lines fn in
+  let n_total = LO.length fn in
   let filter =
     if pairs then
       (fun s -> BatString.starts_with s "active")
     else
       (fun s -> BatString.starts_with s "+1 ") in
   let n_actives = ref 0 in
-  Utls.iter_on_lines_of_file fn (fun line ->
+  LO.iter fn (fun line ->
       if filter line then
         incr n_actives
     );
@@ -497,21 +498,21 @@ let epsilon_range maybe_epsilon maybe_esteps maybe_es train =
     svr_epsilon_range nsteps train_pIC50s
 
 let read_IC50s_from_train_fn pairs train_fn =
-  Utls.map_on_lines_of_file train_fn (get_pIC50 pairs)
+  LO.map train_fn (get_pIC50 pairs)
 
 let read_IC50s_from_preds_fn pairs preds_fn =
   if pairs then
-    Utls.map_on_lines_of_file preds_fn
+    LO.map preds_fn
       (fun line -> Scanf.sscanf line "%s@\t%f" (fun _name score -> score))
   else
-    Utls.map_on_lines_of_file preds_fn float_of_string
+    LO.map preds_fn float_of_string
 
 let lines_of_file pairs2csv do_classification instance_wise_norm fn =
   let maybe_normalized_lines =
     if instance_wise_norm then
-      Utls.map_on_lines_of_file fn normalize_line
+      LO.map fn normalize_line
     else
-      Utls.lines_of_file fn in
+      LO.lines_of_file fn in
   if pairs2csv then
     L.map (atom_pairs_line_to_csv do_classification) maybe_normalized_lines
   else
@@ -716,10 +717,11 @@ let main () =
                 (* dump to a .act_pred file  *)
                 let act_preds = L.combine actual preds in
                 let rmse = Cpm.RegrStats.rmse actual preds in
-                Utls.list_to_file output_fn
-                  (fun (act, pred) ->
-                     sprintf "%f\t%f" act pred
-                  ) act_preds;
+                LO.with_out_file output_fn (fun out ->
+                    L.iter (fun (act, pred) ->
+                        fprintf out "%f\t%f" act pred
+                      ) act_preds
+                  );
                 let title_str =
                   sprintf "T=%s nfolds=%d e=%g C=%g R2=%.3f RMSE=%.3f"
                     input_fn nfolds best_e best_c best_r2 rmse in
