@@ -11,6 +11,7 @@ open Printf
 module A = BatArray
 module Fn = Filename
 module L = BatList
+module LO = Line_oriented
 module Log = Dolog.Log
 
 type filename = string
@@ -35,86 +36,8 @@ let enforce (condition: bool) (err_msg: string): unit =
   if not condition then
     failwith err_msg
 
-let with_out_file (fn: filename) (f: out_channel -> 'a): 'a =
-  let output = open_out_bin fn in
-  let res = f output in
-  close_out output;
-  res
-
-let with_temp_out_file (f: filename -> 'a): 'a =
-  let temp_file =
-    Fn.temp_file ~temp_dir:"/tmp" "" (* no_prefix *) "" (* no_suffix *) in
-  let res = f temp_file in
-  Sys.remove temp_file;
-  res
-
-let with_in_file (fn: filename) (f: in_channel -> 'a): 'a =
-  let input = open_in_bin fn in
-  let res = f input in
-  close_in input;
-  res
-
-let with_in_file2 fn1 fn2 f =
-  let in1 = open_in_bin fn1 in
-  let in2 = open_in_bin fn2 in
-  let res = f in1 in2 in
-  close_in in1;
-  close_in in2;
-  res
-
-let with_in_file3 fn1 fn2 fn3 f =
-  let in1 = open_in_bin fn1 in
-  let in2 = open_in_bin fn2 in
-  let in3 = open_in_bin fn3 in
-  let res = f in1 in2 in3 in
-  close_in in1;
-  close_in in2;
-  close_in in3;
-  res
-
-let with_infile_outfile (in_fn: filename) (out_fn: filename)
-    (f: in_channel -> out_channel -> 'a): 'a =
-  let input = open_in_bin in_fn in
-  let output = open_out_bin out_fn in
-  let res = f input output in
-  close_in input;
-  close_out output;
-  res
-
-let lines_of_file (fn: filename): string list =
-  with_in_file fn (fun input ->
-      let res, exn = L.unfold_exc (fun () -> input_line input) in
-      if exn <> End_of_file then
-        raise exn
-      else res
-    )
-
-(* all lines of given file, in reverse order *)
-let rev_lines_of_file (fn: filename): string list =
-  with_in_file fn (fun input ->
-      let res = ref [] in
-      try
-        while true do
-          res := (input_line input) :: !res
-        done;
-        assert(false) (* never reached *)
-      with End_of_file -> !res
-    )
-
-(* map f on lines of file *)
-let map_on_lines_of_file (fn: filename) (f: string -> 'a): 'a list =
-  L.rev_map f (rev_lines_of_file fn)
-
-let lines_to_file fn l =
-  with_out_file fn (fun out ->
-      List.iter (fprintf out "%s\n") l
-    )
-
-let list_to_file (fn: filename) (f: 'a -> string) (l: 'a list): unit =
-  lines_to_file fn (L.map f l)
-
 let array_to_file (fn: filename) (f: 'a -> string) (a: 'a array): unit =
-  with_out_file fn (fun out ->
+  LO.with_out_file fn (fun out ->
       A.iter (fun x ->
           fprintf out "%s\n" (f x)
         ) a
@@ -129,62 +52,6 @@ let array_bootstrap_sample rng nb_samples a =
       A.unsafe_get a (Random.State.int rng n)
     )
 
-(* all lines of file [fn], except those starting with [comment_prefix] *)
-let uncommented_lines_of_file
-    (comment_prefix: string) (fn: filename): string list =
-  let lines_rev = ref [] in
-  with_in_file fn (fun input ->
-      try
-        while true do
-          lines_rev := (input_line input) :: !lines_rev
-        done
-      with End_of_file -> ()
-    );
-  L.fold_left (fun acc l ->
-      if BatString.starts_with l comment_prefix then
-        acc
-      else
-        l :: acc
-    ) [] !lines_rev
-
-(* if the first line is a comment (starts with '#'); then we extract
-   it separately from other lines; else we treat it as any other line *)
-let maybe_extract_comment_header (fn: filename): string option * string list =
-  let all_lines = lines_of_file fn in
-  match all_lines with
-  | [] -> (None, [])
-  | fst :: others ->
-    if BatString.starts_with fst "#" then
-      (Some fst, others)
-    else
-      (None, all_lines)
-
-(* call f on lines of file *)
-let iter_on_lines_of_file fn f =
-  let input = open_in_bin fn in
-  try
-    while true do
-      f (input_line input)
-    done
-  with End_of_file -> close_in input
-
-let iteri_on_lines_of_file fn f =
-  let i = ref 0 in
-  let input = open_in_bin fn in
-  try
-    while true do
-      f !i (input_line input);
-      incr i
-    done
-  with End_of_file -> close_in input
-
-let map_on_file (fn: filename) (f: in_channel -> 'a): 'a list =
-  with_in_file fn (fun input ->
-      let res, exn = L.unfold_exc (fun () -> f input) in
-      if exn = End_of_file then res
-      else raise exn
-    )
-
 (* skip 'nb' blocks from file being read *)
 let skip_blocks nb read_one input =
   if nb = 0 then ()
@@ -193,19 +60,6 @@ let skip_blocks nb read_one input =
     for _ = 1 to nb do
       ignore(read_one input)
     done
-
-let read_lines = lines_of_file
-
-let write_lines (lines: string list) (output_fn: filename): unit =
-  with_out_file output_fn (fun out ->
-      List.iter (fprintf out "%s\n") lines
-    )
-
-let output_lines = write_lines
-
-(* keep only lines that satisfy p *)
-let filter_lines_of_file fn p =
-  L.filter p (lines_of_file fn)
 
 (* get the first line (stripped) output by given command *)
 let get_command_output (cmd: string): string =
@@ -282,19 +136,6 @@ let string_contains super sub =
 let os_is_Mac_OS () =
   string_contains (get_command_output "uname -a") "Darwin"
 
-let string_contains_non_binary_digit = Str.regexp "[^01]"
-
-let string_contains_only_zeros_or_ones (s: string): bool =
-  not (Str.string_match string_contains_non_binary_digit s 0)
-
-let string_contains_non_digits_non_sep = Str.regexp "[^-0123456789;]"
-
-let string_is_a_list_of_integers (s: string): bool =
-  BatString.starts_with s "[" &&
-  BatString.ends_with s "]" &&
-  let chopped = BatString.chop ~l:1 ~r:1 s in
-  not (Str.string_match string_contains_non_digits_non_sep chopped 0)
-
 let may_apply f = function
   | Some x -> f x
   | None -> ()
@@ -307,27 +148,14 @@ let lock_file_for_writing (fn: filename): bool =
     true
   with Unix.Unix_error _ -> false
 
-(* compute all distinct pairs ((a,b) = (b,a)) of elements in 'l' *)
-let all_pairs (l: 'a list): ('a * 'a) list =
-  let pair x ys =
-    L.map (fun y ->
-        (x, y)
-      ) ys
-  in
-  let rec loop acc = function
-    | [] -> acc
-    | x :: xs ->
-      loop (L.rev_append (pair x xs) acc) xs
-  in
-  loop [] l
-
 exception Enough_times
 
 (* accumulate the result of calling 'f' 'n' times *)
 let n_times n f =
   let i = ref 0 in
   BatList.unfold_exc (fun () ->
-      if !i = n then raise Enough_times
+      if !i = n then
+        raise Enough_times
       else
         let res = f () in
         incr i;
@@ -342,20 +170,8 @@ let wall_clock_time f =
   let delta_t = stop -. start in
   (delta_t, res)
 
-let push (x: 'a) (l: 'a list ref): unit =
-  l := x :: !l
-
 (* the identity function *)
 let id x = x
-
-let one_or_more_spaces = Str.regexp "[ ]+"
-
-let string_of_floats_array fv =
-  let buff = Buffer.create 80 in
-  Array.iter (fun f ->
-      Buffer.add_string buff (sprintf "%f " f)
-    ) fv;
-  Buffer.contents buff
 
 (* enforce filename uses one of the allowed extensions *)
 let enforce_file_extension allowed_exts fn =
@@ -395,18 +211,6 @@ let string_of_array ?pre:(pre = "[|") ?sep:(sep = ";") ?suf:(suf = "|]")
   Buffer.add_string buff suf;
   Buffer.contents buff
 
-(* marshal x to file *)
-let save fn x =
-  with_out_file fn (fun out ->
-      Marshal.to_channel out x [Marshal.No_sharing]
-    )
-
-(* unmarshal x from file *)
-let restore fn =
-  with_in_file fn (fun input ->
-      Marshal.from_channel input
-    )
-
 let marshal_to_string x =
   Marshal.(to_string x [No_sharing])
 
@@ -418,9 +222,6 @@ let is_odd i =
 
 let is_even i =
   i mod 2 = 0
-
-let get_first_line fn =
-  with_in_file fn input_line
 
 (* like the cut unix command *)
 let cut d f line =
@@ -456,10 +257,6 @@ let favg = function
   | [] -> 0.0 (* protect against empty list *)
   | xs -> L.favg xs
 
-let fmin_max = function
-  | [] -> (-. infinity, infinity) (* protect against empty list *)
-  | xs -> L.min_max ~cmp:BatFloat.compare xs
-
 (* population standard deviation *)
 let stddev (l: float list): float =
   let n, sx, sx2 =
@@ -478,17 +275,6 @@ let min_max x y =
     (x, y)
   else
     (y, x)
-
-(* <=> wc -l fn *)
-let file_nb_lines fn =
-  let count = ref 0 in
-  iter_on_lines_of_file fn (fun _line -> incr count);
-  !count
-
-let list_filter_count p l =
-  let res = ref 0 in
-  L.iter (fun x -> if p x then incr res) l;
-  !res
 
 let array_count p a =
   let i = ref 0 in
