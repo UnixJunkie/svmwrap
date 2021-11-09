@@ -4,8 +4,6 @@
    Tokyo University,
    5-1-5 Kashiwa-no-ha, Kashiwa-shi, Chiba-ken, 277-8561, Japan. *)
 
-open Printf
-
 module A = BatArray
 module Fn = Filename
 module L = BatList
@@ -77,35 +75,5 @@ module Make (SL: Cpm.MakeROC.SCORE_LABEL) = struct
           (t, ef, rem_acts, rem_decs) :: acc
         ) [] thresholds in
     (nb_actives, nb_decoys, L.rev rev_res)
-
-  let evaluate_performance ?noplot:(noplot = false)
-      top_n maybe_curve_fn scores_fn title_str score_labels_a =
-    let for_auc = match top_n with
-      | None -> score_labels_a
-      | Some _n ->
-        failwith "Perf.evaluate_performance: top_n not supported" in
-    (* save ROC curve *)
-    Utls.array_to_file scores_fn
-      (fun sl ->
-         let score = SL.get_score sl in
-         let label = SL.get_label sl in
-         sprintf "%f %d" score (Utls.int_of_bool label)
-      ) for_auc;
-    (* compute ROC curve *)
-    let curve_fn = match maybe_curve_fn with
-      | None -> Fn.temp_file ~temp_dir:"/tmp" "rf_train_" ".roc"
-      | Some fn -> fn in
-    let roc_curve_a = ROC.fast_roc_curve_a for_auc in
-    Utls.array_to_file curve_fn (fun (x, y) -> sprintf "%f %f" x y)
-      roc_curve_a;
-    (* plot ROC curve *)
-    let ef_curve_fn = Fn.temp_file ~temp_dir:"/tmp" "rf_train_" ".ef" in
-    let nb_acts, nb_decs, ef_curve = actives_portion_plot_a for_auc in
-    Utls.list_to_file ef_curve_fn
-      (fun (t, ef, ra, rd) -> sprintf "%f %f %f %f" t ef ra rd) ef_curve;
-    (if not noplot then
-       Gnuplot.roc_curve title_str
-         scores_fn curve_fn nb_acts nb_decs ef_curve_fn
-    );
 
 end
