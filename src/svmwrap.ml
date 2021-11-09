@@ -409,6 +409,14 @@ let epsilon_range maybe_epsilon maybe_esteps maybe_es train =
       mini avg std maxi;
     svr_epsilon_range nsteps train_pIC50s
 
+(* default gamma range *)
+let gamma_range = [0.00001; 0.00002; 0.00005;
+                   0.0001;  0.0002;  0.0005;
+                   0.001;   0.002;   0.005;
+                   0.01;    0.02;    0.05;
+                   0.1;     0.2;     0.5;
+                   1.0; 2.0; 5.0; 10.0]
+
 let read_IC50s_from_train_fn pairs train_fn =
   LO.map train_fn (get_pIC50 pairs)
 
