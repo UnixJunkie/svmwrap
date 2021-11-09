@@ -16,7 +16,6 @@ module FpMol = Molenc.FpMol
 module L = BatList
 module Log = Dolog.Log
 module Opt = BatOption
-module PHT = Dokeysto_camltc.Db_camltc.RW
 module RNG = BatRandom.State
 module S = BatString
 
@@ -294,109 +293,6 @@ let pairs_to_csv verbose do_classification pairs_fn =
        (atom_pairs_line_to_csv do_classification));
   tmp_csv_fn
 
-let prod_predict ncores verbose pairs model_fns test_fn output_fn =
-  let quiet_command =
-    if verbose then ""
-    else "2>&1 > /dev/null" in
-  let pred_fns =
-    Parany.Parmap.parfold ncores
-      (fun model_fn ->
-         let preds_fn =
-           Fn.temp_file ~temp_dir:"/tmp" "linwrap_preds_" ".txt" in
-         Log.info "preds_fn: %s" preds_fn;
-         let tmp_csv_fn =
-           if pairs then
-             let do_classification = true in
-             pairs_to_csv verbose do_classification test_fn
-           else
-             test_fn in
-         Utls.run_command ~debug:verbose
-           (* '-b 1' forces probabilist predictions instead of raw scores *)
-           (sprintf "%s -b 1 %s %s %s %s"
-              liblin_predict tmp_csv_fn model_fn preds_fn quiet_command);
-         (if pairs && not verbose then Sys.remove tmp_csv_fn);
-         preds_fn)
-      (fun acc preds_fn -> preds_fn :: acc)
-      [] model_fns in
-  (* all pred files should have this same number of predictions
-     plus a header line *)
-  let nb_rows = Utls.file_nb_lines test_fn in
-  let card = 1 + nb_rows in
-  Utls.enforce
-    (L.for_all (fun fn -> card = (Utls.file_nb_lines fn)) pred_fns)
-    "Linwrap.prod_predict: linwrap_preds_*.txt: different number of lines";
-  let tmp_pht_fn = Fn.temp_file ~temp_dir:"/tmp" "linwrap_" ".pht" in
-  let pht = PHT.create tmp_pht_fn in
-  Log.info "Persistent hash table file: %s" tmp_pht_fn;
-  let nb_models = L.length pred_fns in
-  begin match pred_fns with
-    | [] -> assert(false)
-    | pred_fn_01 :: other_pred_fns ->
-      begin
-        (* populate ht *)
-        Log.info "gathering %d models..." nb_models;
-        Utls.iteri_on_lines_of_file pred_fn_01 (fun k line ->
-            if k = 0 then
-              assert(line = "labels 1 -1") (* check header *)
-            else
-              let pred_act_p = pred_score_of_pred_line line in
-              let k_str = string_of_int k in
-              PHT.add pht k_str (Utls.marshal_to_string pred_act_p)
-          );
-        Sys.remove pred_fn_01;
-        (* accumulate *)
-        L.iteri (fun i pred_fn ->
-            Log.info "done: %d/%d" (i + 1) nb_models;
-            Utls.iteri_on_lines_of_file pred_fn (fun k line ->
-                if k = 0 then
-                  assert(line = "labels 1 -1") (* check header *)
-                else
-                  let pred_act_p = pred_score_of_pred_line line in
-                  let k_str = string_of_int k in
-                  let prev_v: float =
-                    Utls.unmarshal_from_string (PHT.find pht k_str) in
-                  PHT.replace pht k_str
-                    (Utls.marshal_to_string (pred_act_p +. prev_v))
-              );
-            Sys.remove pred_fn
-          ) other_pred_fns;
-        Log.info "done: %d/%d" nb_models nb_models
-      end
-  end;
-  (* write them to output file, averaged *)
-  Utls.with_out_file output_fn (fun out ->
-      for i = 1 to nb_rows do
-        let k_str = string_of_int i in
-        let sum_preds: float =
-          Utls.unmarshal_from_string (PHT.find pht k_str) in
-        fprintf out "%g\n" (sum_preds /. (float nb_models))
-      done
-    );
-  PHT.close pht;
-  (* PHT.destroy pht; *)
-  (* the previous line would raise Failure("invalid operation")
-   * so we just remove the file instead *)
-  Sys.remove tmp_pht_fn;
-  if output_fn <> "/dev/stdout" then
-    (* compute AUC *)
-    let auc =
-      let test_lines = Utls.lines_of_file test_fn in
-      let names = L.map (get_name_from_AP_line pairs) test_lines in
-      let true_labels = L.map (is_active pairs) test_lines in
-      let pred_scores =
-        L.map (fun l -> Scanf.sscanf l "%f" (fun x -> x))
-          (Utls.lines_of_file output_fn) in
-      let score_labels = L.map SL.create (L.combine true_labels pred_scores) in
-      let name_scores = L.combine names pred_scores in
-      (* prepend score with mol. name *)
-      Utls.with_out_file output_fn (fun out ->
-          L.iter (fun (name, pred_score) ->
-              fprintf out "%s\t%g\n" name pred_score
-            ) name_scores
-        );
-      ROC.auc score_labels in
-    Log.info "AUC: %.3f" auc
-
 let train_test ncores verbose pairs cmd rng c w k train test =
   if k <= 1 then
     (* we don't use bagging then *)
@@ -467,64 +363,6 @@ let mcc_scan_proper ncores score_labels =
       ) mccs in
   (threshold, mcc_max)
 
-let mcc_scan ncores verbose cmd rng c w k nfolds dataset =
-  Utls.enforce (nfolds > 1) "Linwrap.mcc_scan: nfolds <= 1";
-  let score_labels =
-    nfolds_train_test ncores verbose false cmd rng c w k nfolds dataset in
-  let threshold, mcc_max = mcc_scan_proper ncores score_labels in
-  Log.info "threshold: %g %dxCV_MCC: %g" threshold nfolds mcc_max
-
-let perf_plot noplot score_labels c' w' k' auc bed =
-  let title_str =
-    sprintf "C=%g w=%g k=%d AUC=%.3f BED=%.3f"
-      c' w' k' auc bed in
-  if not noplot then
-    let tmp_scores_fn =
-      Fn.temp_file ~temp_dir:"/tmp" "linwrap_optimize_" ".txt" in
-    Perfs.evaluate_performance
-      None None tmp_scores_fn title_str score_labels;
-    Sys.remove tmp_scores_fn
-
-(* return the best parameter configuration found in the parameter
-   configs list [cwks]: (best_c, best_w, best_k, best_auc) *)
-let optimize ncores verbose noplot nfolds model_cmd rng train test cwks =
-  match cwks with
-  | [] -> assert(false) (* there should be at least one configuration *)
-  | [((c', w'), k')] ->
-    let for_auc =
-      let score_labels =
-        train_test_maybe_nfolds
-          ncores nfolds verbose model_cmd rng c' w' k' train test in
-      A.of_list score_labels in
-    ROC.rank_order_by_score_a for_auc;
-    let auc = ROC.fast_auc_a for_auc in
-    let bed = ROC.fast_bedroc_auc_a for_auc in
-    perf_plot noplot for_auc c' w' k' auc bed;
-    (c', w', k', auc)
-  | _ ->
-    Parany.Parmap.parfold ncores
-      (fun ((c', w'), k') ->
-         let for_auc =
-           let score_labels =
-             train_test_maybe_nfolds
-               1 nfolds verbose model_cmd rng c' w' k' train test in
-           A.of_list score_labels in
-         ROC.rank_order_by_score_a for_auc;
-         let auc = ROC.fast_auc_a for_auc in
-         let bed = ROC.fast_bedroc_auc_a for_auc in
-         perf_plot noplot for_auc c' w' k' auc bed;
-         (c', w', k', auc))
-      (fun
-        ((_c, _w, _k, prev_best_auc) as prev)
-        ((c', w', k', curr_auc) as curr) ->
-        if curr_auc > prev_best_auc then
-          (Log.info "c: %g w1: %g k: %d AUC: %.3f" c' w' k' curr_auc;
-           curr)
-        else
-          (Log.warn "c: %g w1: %g k: %d AUC: %.3f" c' w' k' curr_auc;
-           prev)
-      ) (-1.0, -1.0, -1, 0.5) cwks
-
 (* find best (e, C) configuration by R2 maximization *)
 let best_r2 l =
   L.fold_left (fun
@@ -579,35 +417,13 @@ let mol_of_lines lines =
 let parmap2 ncores f2 l1 l2 =
   Parany.Parmap.parmap ncores (fun (x, y) -> f2 x y) (L.combine l1 l2)
 
-(* compute the list of (tani_dist_nearest_in_train, act, pred)
-   for each molecule in test *)
-let applicability_domain_points ncores train test test_acts test_preds =
-  (* BST index training set *)
-  Log.info "indexing train mols...";
-  let bst =
-    let train_mols = A.of_list train in
-    Bstree.(create 1 Two_bands train_mols) in
-  (* find distance to nearest for each in test *)
-  Log.info "querying test mols...";
-  (* return triplets *)
-  let test_act_preds = L.combine test_acts test_preds in
-  parmap2 ncores (fun test_mol (test_act, test_pred) ->
-      let _nearest, nearest_d = Bstree.nearest_neighbor test_mol bst in
-      (nearest_d, test_act, test_pred)
-    ) test test_act_preds
-
-let single_train_test_regr_nfolds verbose ad_plot nfolds nprocs e c train =
+let single_train_test_regr_nfolds verbose nfolds nprocs e c train =
   let train_tests = Cpm.Utls.cv_folds nfolds train in
   let all_act_preds_points =
     Parany.Parmap.parmap nprocs (fun (train', test') ->
         let acts, preds =
           single_train_test_regr verbose Discard e c train' test' in
-        let points =
-          if ad_plot then
-            applicability_domain_points 1 (* already inside a parmap *)
-              (mol_of_lines train') (mol_of_lines test') acts preds
-          else [] in
-        ((acts, preds), points)
+        ((acts, preds), [])
       ) train_tests in
   let all_act_preds, points = L.split all_act_preds_points in
   let xs, ys = L.split all_act_preds in
@@ -830,8 +646,6 @@ let main () =
               [--no-plot]: no gnuplot\n  \
               [-k <int>]: number of bags for bagging (default=off)\n  \
               [{-n|--NxCV} <int>]: folds of cross validation\n  \
-              [--mcc-scan]: MCC scan for a trained model (requires n>1)\n  \
-                            also requires (c, w, k) to be known\n  \
               [-q]: quiet liblinear\n  \
               [--seed <int>]: fix random seed\n  \
               [-p <float>]: training set portion (in [0.0:1.0])\n  \
@@ -906,7 +720,6 @@ let main () =
   let k_range_str = CLI.get_string_opt ["--k-range"] args in
   let fixed_k = CLI.get_int_opt ["-k"] args in
   let scan_k = CLI.get_set_bool ["--scan-k"] args in
-  let do_mcc_scan = CLI.get_set_bool ["--mcc-scan"] args in
   let quiet = CLI.get_set_bool ["-q"] args in
   let fixed_w = CLI.get_float_opt ["-w"] args in
   let instance_wise_norm = CLI.get_set_bool ["--iwn"] args in
@@ -945,7 +758,7 @@ let main () =
     else match fixed_k with
       | Some k -> [k]
       | None -> [1] in
-  let cwks = L.cartesian_product (L.cartesian_product cs ws) ks in
+  let _cwks = L.cartesian_product (L.cartesian_product cs ws) ks in
   begin match model_cmd with
     | Restore_from models_fn ->
       if do_regression then
@@ -960,21 +773,10 @@ let main () =
             sprintf "T=%s N=%d R2=%.3f RMSE=%.3f" input_fn (L.length preds) r2 rmse in
           (if not no_gnuplot then
              Gnuplot.regr_plot title_str acts preds
-          );
-          (if compute_AD then
-             match maybe_train_fn with
-             | None -> Log.error "-l and --dump-AD also require --train"
-             | Some train_fn ->
-               let train = FpMol.molecules_of_file train_fn in
-               let test = FpMol.molecules_of_file input_fn in
-               let ad_points =
-                 applicability_domain_points ncores train test acts preds in
-               dump_AD_points ad_points_fn ad_points
           )
         end
       else
-        let model_fns = Utls.lines_of_file models_fn in
-        prod_predict ncores verbose pairs model_fns input_fn output_fn
+        failwith "not do_regression: not implemented yet"
     | Save_into (_)
     | Discard ->
       match maybe_train_fn, maybe_valid_fn, maybe_test_fn with
@@ -985,16 +787,6 @@ let main () =
             L.shuffle ~state:rng
               (lines_of_file pairs
                  do_classification instance_wise_norm input_fn) in
-          if do_mcc_scan then
-            begin match cs, ws, ks with
-              | [c], [w], [k] ->
-                (* we only try MCC scan for a model with known parameters *)
-                mcc_scan ncores verbose model_cmd rng c w k nfolds all_lines
-              | _, _, _ ->
-                failwith
-                  "Linwrap: --mcc-scan: some hyper params are still free"
-            end
-          else
             let nb_lines = L.length all_lines in
             (* partition *)
             let train_card =
@@ -1017,7 +809,7 @@ let main () =
                   else
                     let actual', preds', ad_points =
                       single_train_test_regr_nfolds
-                        verbose compute_AD nfolds ncores best_e best_c
+                        verbose nfolds ncores best_e best_c
                         all_lines in
                     (if compute_AD then
                        dump_AD_points ad_points_fn ad_points
@@ -1037,38 +829,9 @@ let main () =
                 if not no_gnuplot then
                   Gnuplot.regr_plot title_str actual preds
               end
-            else (* classification *)
-              let best_c, best_w, best_k, best_auc =
-                optimize ncores verbose no_gnuplot nfolds
-                  model_cmd rng train test cwks in
-              Log.info "T=%s nfolds=%d C=%.3f w=%.3f k=%d AUC=%.3f"
-                input_fn nfolds best_c best_w best_k best_auc
         end
-      | (Some train_fn, Some valid_fn, Some test_fn) ->
-        begin
-          let train =
-            lines_of_file
-              pairs do_classification instance_wise_norm train_fn in
-          let best_c, best_w, best_k, best_valid_AUC =
-            let valid =
-              lines_of_file
-                pairs do_classification instance_wise_norm valid_fn in
-            optimize ncores verbose no_gnuplot nfolds
-              model_cmd rng train valid cwks in
-          Log.info "best (c, w, k) config: %g %g %d" best_c best_w best_k;
-          Log.info "valAUC: %.3f" best_valid_AUC;
-          let test_AUC =
-            let test =
-              lines_of_file
-                pairs do_classification instance_wise_norm test_fn in
-            let score_labels =
-              let one_cpu = 1 in
-              train_test
-                one_cpu verbose false model_cmd rng best_c best_w best_k
-                train test in
-            ROC.auc score_labels in
-          Log.info "tesAUC: %.3f" test_AUC
-        end
+      | (Some _train_fn, Some _valid_fn, Some _test_fn) ->
+        failwith "not implemented yet"
       | _ ->
         failwith "Linwrap: --train, --valid and --test: \
                   provide all three or none"
