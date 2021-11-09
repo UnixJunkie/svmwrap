@@ -1,7 +1,6 @@
 (* Copyright (C) 2021, Francois Berenger
 
-   Tsuda Laboratory,
-   Tokyo University,
+   Tsuda Laboratory, Tokyo University,
    5-1-5 Kashiwa-no-ha, Kashiwa-shi, Chiba-ken, 277-8561, Japan.
 
    CLI wrapper on top of libsvm-tools.
@@ -21,6 +20,10 @@ module RNG = BatRandom.State
 module S = BatString
 
 let svm_type = 3 (* epsilon-SVR (cf. svm-train manpage) *)
+
+(* FBR: make Linear work *)
+(* FBR: make RBF work *)
+(* FBR: make Sigmoid work *)
 
 (* kernels we support *)
 type kernel = Linear
