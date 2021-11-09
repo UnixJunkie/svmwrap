@@ -19,7 +19,6 @@ module Opt = BatOption
 module RNG = BatRandom.State
 module S = BatString
 
-(* FBR: make Linear work *)
 (* FBR: make RBF work *)
 (* FBR: make Sigmoid work *)
 
@@ -399,7 +398,7 @@ let epsilon_range maybe_epsilon maybe_esteps maybe_es train =
     failwith "Svmwrap.epsilon_range: (e or esteps) and --e-range"
   | (Some _, Some _, None) ->
     failwith "Svmwrap.epsilon_range: both e and esteps"
-  | (None, None, None) -> failwith "Svmwrap.epsilon_range: no e and no esteps"
+  | (None, None, None) -> [0.1] (* svm-train's default for -p option *)
   | (Some e, None, None) -> [e]
   | (None, Some nsteps, None) ->
     let train_pIC50s = L.map (get_pIC50 false) train in
@@ -451,7 +450,7 @@ let main () =
               [-o <filename>]: predictions output file\n  \
               [-np <int>]: ncores\n  \
               [-c <float>]: fix C\n  \
-              [-e <float>]: fix epsilon (for SVR);\n  \
+              [-e <float>]: epsilon in the loss function of epsilon-SVR;\n  \
               (0 <= epsilon <= max_i(|y_i|))\n  \
               [--iwn]: turn ON instance-wise-normalization\n  \
               [--no-plot]: no gnuplot\n  \
