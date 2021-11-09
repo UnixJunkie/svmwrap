@@ -12,7 +12,7 @@ depends: [
   "conf-libsvm-tools"
   "cpm" {>= "11.0.0"}
   "dolog" {>= "6.0.0"}
-  "dune" {>= "1.10"}
+  "dune" {>= "2.9"}
   "minicli" {>= "5.0.0"}
   "molenc"
   "parany" {>= "11.0.0"}
