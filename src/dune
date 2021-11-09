@@ -1,0 +1,6 @@
+
+(executables
+  (names        svmwrap)
+  (public_names svmwrap)
+  (libraries batteries cpm dolog minicli parany molenc)
+  (modules utls svmwrap gnuplot perf bstree))
