@@ -31,24 +31,6 @@ let svm_train, svm_predict =
   (* names on Linux *)
   ("svm-train", "svm-predict")
 
-let pred_score_of_pred_line l =
-  try Scanf.sscanf l "%d %f %f" (fun _label act_p _dec_p -> act_p)
-  with exn ->
-    (Log.fatal "Svmwrap.pred_score_of_pred_line: cannot parse: %s" l;
-     raise exn)
-
-let is_active pairs s =
-  S.starts_with s (if pairs then "active" else "+1 ")
-
-let get_name_from_AP_line pairs l =
-  if pairs then
-    try
-      let name, _rest = S.split ~by:"," l in
-      name
-    with exn -> (Log.fatal "cannot parse: %s" l; raise exn)
-  else
-    "" (* not sure there is one in that case *)
-
 let get_pIC50 pairs s =
   if pairs then
     try Scanf.sscanf s "%s@,%f,%s" (fun _name pIC50 _features -> pIC50)
@@ -61,18 +43,6 @@ let get_pIC50 pairs s =
     try Scanf.sscanf s "%f %s" (fun pIC50 _features -> pIC50)
     with exn -> (Log.error "Svmwrap.get_pIC50: cannot parse: %s" s;
                  raise exn)
-
-let balanced_bag pairs rng lines =
-  let acts, decs = L.partition (is_active pairs) lines in
-  let n =
-    let n_acts = L.length acts in
-    let n_decs = L.length decs in
-    min n_acts n_decs in
-  let acts_a = Utls.array_bootstrap_sample rng n (A.of_list acts) in
-  let decs_a = Utls.array_bootstrap_sample rng n (A.of_list decs) in
-  let tmp_a = A.concat [acts_a; decs_a] in
-  A.shuffle ~state:rng tmp_a; (* randomize selected lines order *)
-  A.to_list tmp_a
 
 (* what to do with the created models *)
 type model_command = Restore_from of Utls.filename
@@ -265,50 +235,49 @@ let cv_folds n l =
 (* find best (e, C) configuration by R2 maximization *)
 let best_r2 l =
   L.fold_left (fun
-                ((_best_e, _best_c, _best_k, best_r2) as best)
-                ((_curr_e, _curr_c, _curr_k, curr_r2) as new_best) ->
-                if best_r2 >= curr_r2 then best else new_best
-              ) (0.0, 0.0, 0, 0.0) l
+                ((_best_e, _best_c, best_r2) as best)
+                ((_curr_e, _curr_c, curr_r2) as new_best) ->
+                if best_r2 >= curr_r2 then
+                  best
+                else
+                  new_best
+              ) (0.0, 0.0, 0.0) l
 
-let log_R2 e c k r2 =
-  (if r2 < 0.3 then
-     Log.error
-   else if r2 < 0.5 then
-     Log.warn
-   else
-     Log.info) "(e, C, k, R2) = %g %g %d %.3f" e c k r2
+let log_R2 e c r2 =
+  (if      r2 < 0.3 then Log.error
+   else if r2 < 0.5 then Log.warn
+   else                  Log.info) "(e, C, R2) = %g %g %.3f" e c r2
 
 (* return the best parameter configuration (epsilon, C, k) found *)
-let optimize_regr verbose rng ncores es cs ks train test =
-  let ecks = L.(cartesian_product (cartesian_product es cs) ks) in
-  let e_c_k_r2s =
-    Parany.Parmap.parmap ncores (fun ((e, c), k) ->
-        let act, preds =
-          bagged_train_test_regr 1 verbose rng Discard e c k train test in
+let optimize_regr verbose ncores es cs train test =
+  let ecs = L.cartesian_product es cs in
+  let e_c_r2s =
+    Parany.Parmap.parmap ncores (fun (e, c) ->
+        let act, preds = single_train_test_regr verbose Discard e c train test in
         let r2 = Cpm.RegrStats.r2 act preds in
-        log_R2 e c k r2;
-        (e, c, k, r2)
-      ) ecks in
-  best_r2 e_c_k_r2s
+        log_R2 e c r2;
+        (e, c, r2)
+      ) ecs in
+  best_r2 e_c_r2s
 
 (* like optimize_regr, but using NxCV *)
-let optimize_regr_nfolds ncores verbose rng nfolds es cs ks train =
+let optimize_regr_nfolds ncores verbose nfolds es cs train =
   let train_tests = Cpm.Utls.cv_folds nfolds train in
-  let ecks = L.(cartesian_product (cartesian_product es cs) ks) in
-  let e_c_k_r2s =
-    Parany.Parmap.parmap ncores (fun ((e, c), k) ->
+  let ecs = L.cartesian_product es cs in
+  let e_c_r2s =
+    Parany.Parmap.parmap ncores (fun (e, c) ->
         let all_act_preds =
           L.map (fun (train', test') ->
-              bagged_train_test_regr 1 verbose rng Discard e c k train' test'
+              single_train_test_regr verbose Discard e c train' test'
             ) train_tests in
         let acts, preds =
           let xs, ys = L.split all_act_preds in
           (L.concat xs, L.concat ys) in
         let r2 = Cpm.RegrStats.r2 acts preds in
-        log_R2 e c k r2;
-        (e, c, k, r2)
-      ) ecks in
-  best_r2 e_c_k_r2s
+        log_R2 e c r2;
+        (e, c, r2)
+      ) ecs in
+  best_r2 e_c_r2s
 
 let mol_of_lines lines =
   L.mapi liblinear_line_to_FpMol lines
@@ -541,9 +510,7 @@ let main () =
               [-e <float>]: fix epsilon (for SVR);\n  \
               (0 <= epsilon <= max_i(|y_i|))\n  \
               [--iwn]: turn ON instance-wise-normalization\n  \
-              [-w <float>]: fix w1\n  \
               [--no-plot]: no gnuplot\n  \
-              [-k <int>]: number of bags for bagging (default=off)\n  \
               [{-n|--NxCV} <int>]: folds of cross validation\n  \
               [-q]: quiet liblinear\n  \
               [--seed <int>]: fix random seed\n  \
@@ -559,17 +526,10 @@ let main () =
               [--scan-c]: scan for best C\n  \
               [--scan-e <int>]: epsilon scan #steps for SVR\n  \
               [--regr]: regression (SVR); also, implied by -e and --scan-e\n  \
-              [--scan-w]: scan weight to counter class imbalance\n  \
-              [--w-range <float>:<int>:<float>]: specific range for w\n  \
-              (semantic=start:nsteps:stop)\n  \
               [--e-range <float>:<int>:<float>]: specific range for e\n  \
               (semantic=start:nsteps:stop)\n  \
               [--c-range <float,float,...>] explicit scan range for C \n  \
               (example='0.01,0.02,0.03')\n  \
-              [--k-range <int,int,...>] explicit scan range for k \n  \
-              (example='1,2,3,5,10')\n  \
-              [--scan-k]: scan number of bags \
-              (advice: optim. k rather than w)\n  \
               [--dump-AD <filename>]: dump AD points to file\n  \
               (also requires --regr, --pairs and n>1)\n"
        Sys.argv.(0);
@@ -612,15 +572,9 @@ let main () =
     | Some seed -> BatRandom.State.make [|seed|] in
   let scan_C = CLI.get_set_bool ["--scan-c"] args in
   let fixed_c = CLI.get_float_opt ["-c"] args in
-  let scan_w = CLI.get_set_bool ["--scan-w"] args in
-  let w_range_str = CLI.get_string_opt ["--w-range"] args in
   let e_range_str = CLI.get_string_opt ["--e-range"] args in
   let c_range_str = CLI.get_string_opt ["--c-range"] args in
-  let k_range_str = CLI.get_string_opt ["--k-range"] args in
-  let fixed_k = CLI.get_int_opt ["-k"] args in
-  let scan_k = CLI.get_set_bool ["--scan-k"] args in
   let quiet = CLI.get_set_bool ["-q"] args in
-  let fixed_w = CLI.get_float_opt ["-w"] args in
   let instance_wise_norm = CLI.get_set_bool ["--iwn"] args in
   Utls.enforce (not (L.mem "-e" args && L.mem "--scan-e" args))
     "Svmwrap: -e and --scan-e are exclusive";
@@ -641,23 +595,8 @@ let main () =
       if scan_C || BatOption.is_some c_range_str then
         decode_c_range c_range_str
       else [1.0] in
-  (* scan w? *)
-  let ws =
-    if scan_w || BatOption.is_some w_range_str then
-      decode_w_range pairs maybe_train_fn input_fn w_range_str
-    else match fixed_w with
-      | Some w -> [w]
-      | None -> [1.0] in
   (* e-range? *)
   let maybe_es = decode_e_range e_range_str in
-  (* scan k? *)
-  let ks =
-    if scan_k || BatOption.is_some k_range_str then
-      decode_k_range k_range_str
-    else match fixed_k with
-      | Some k -> [k]
-      | None -> [1] in
-  let _cwks = L.cartesian_product (L.cartesian_product cs ws) ks in
   begin match model_cmd with
     | Restore_from models_fn ->
       if do_regression then
@@ -693,18 +632,18 @@ let main () =
             let train, test = L.takedrop train_card all_lines in
             if do_regression then
               begin
-                let best_e, best_c, best_k, best_r2 =
+                let best_e, best_c, best_r2 =
                   let epsilons =
                     epsilon_range maybe_epsilon maybe_esteps maybe_es train in
                   if nfolds = 1 then
-                    optimize_regr verbose rng ncores epsilons cs ks train test
+                    optimize_regr verbose ncores epsilons cs train test
                   else
                     optimize_regr_nfolds
-                      ncores verbose rng nfolds epsilons cs ks all_lines in
+                      ncores verbose nfolds epsilons cs all_lines in
                 let actual, preds =
                   if nfolds = 1 then
-                    bagged_train_test_regr ncores verbose rng model_cmd
-                      best_e best_c best_k train test
+                    single_train_test_regr
+                      verbose model_cmd best_e best_c train test
                   else
                     let actual', preds', ad_points =
                       single_train_test_regr_nfolds
