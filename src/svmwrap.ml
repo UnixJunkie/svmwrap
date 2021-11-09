@@ -93,20 +93,6 @@ let single_train_test_regr verbose cmd e c train test =
   let pred_values = L.map float_of_string pred_lines in
   (actual_values, pred_values)
 
-let accumulate_scores x y = match (x, y) with
-  | ([], sl2) -> sl2
-  | (sl1, []) -> sl1
-  | (sl1, sl2) ->
-    L.map2 (fun (l1, s1) (l2, s2) ->
-        assert(l1 = l2);
-        (l1, s1 +. s2)
-      ) sl1 sl2
-
-let average_scores k sls =
-  assert(L.length sls = k);
-  let sum = L.fold_left accumulate_scores [] sls in
-  L.map (fun (l, s) -> (l, s /. (float k))) sum
-
 (* must be greater than 0 and less than 2^30 *)
 let rand_int_bound = (BatInt.pow 2 30) - 1
 
@@ -154,39 +140,30 @@ let liblinear_line_to_FpMol index l =
     Buffer.add_char buff ']';
     FpMol.create name index (float_of_string ic50) (Buffer.contents buff)
 
-let atom_pairs_line_to_csv do_classification line =
+let atom_pairs_line_to_csv line =
   (* Example for classification:
    * "active<NAME>,pIC50,[feat:val;...]" -> "+1 feat:val ..."
    * "<NAME>,pIC50,[feat:val;...]" -> "-1 feat:val ..." *)
   match S.split_on_char ',' line with
-  | [name; pIC50; features] ->
-    let label_str =
-      if do_classification then
-        if S.starts_with name "active" then "+1" else "-1"
-      else (* regression *)
-        pIC50 in
+  | [_name; pIC50; features] ->
     assert(S.left features 1 = "[" && S.right features 1 = "]");
     let semi_colon_to_space = function | ';' -> " "
                                        | x -> (S.of_char x) in
     let features' =
       S.replace_chars semi_colon_to_space (S.chop ~l:1 ~r:1 features) in
-    sprintf "%s%s" label_str (increment_feat_indexes features')
+    sprintf "%s%s" pIC50 (increment_feat_indexes features')
   | _ -> failwith ("Svmwrap.atom_pairs_line_to_csv: cannot parse: " ^ line)
 
 (* unit tests for atom_pairs_line_to_csv *)
 let () =
-  let s1 = atom_pairs_line_to_csv true "activeMOL,1.0,[2:1;5:8;123:1]" in
-  Utls.enforce ("+1 3:1 6:8 124:1" = s1) s1;
-  let s2 = atom_pairs_line_to_csv false "activeMolecule,1.0,[2:1;5:8;123:1]" in
+  let s2 = atom_pairs_line_to_csv "activeMolecule,1.0,[2:1;5:8;123:1]" in
   Utls.enforce ("1.0 3:1 6:8 124:1" = s2) s2
 
-let pairs_to_csv verbose do_classification pairs_fn =
+let pairs_to_csv verbose pairs_fn =
   let tmp_csv_fn =
     Fn.temp_file ~temp_dir:"/tmp" "svmwrap_pairs2csv_" ".csv" in
   (if verbose then Log.info "--pairs -> tmp CSV: %s" tmp_csv_fn);
-  LO.lines_to_file tmp_csv_fn
-    (LO.map pairs_fn
-       (atom_pairs_line_to_csv do_classification));
+  LO.lines_to_file tmp_csv_fn (LO.map pairs_fn atom_pairs_line_to_csv);
   tmp_csv_fn
 
 (* create folds of cross validation; each fold consists in (train, test) *)
@@ -294,9 +271,8 @@ let () =
   assert(normalize_line "+1 2:1 5:8 123:1" = "+1 2:0.1 5:0.8 123:0.1");
   assert(normalize_line "-1 2:3 4:7" = "-1 2:0.3 4:0.7")
 
-let prepend_scores_by_names
-    verbose quiet_option do_classification test_fn model_fn output_fn =
-  let tmp_csv_fn = pairs_to_csv verbose do_classification test_fn in
+let prepend_scores_by_names verbose quiet_option test_fn model_fn output_fn =
+  let tmp_csv_fn = pairs_to_csv verbose test_fn in
   Utls.run_command ~debug:verbose
     (sprintf "%s %s %s %s %s"
        svm_predict quiet_option tmp_csv_fn model_fn output_fn);
@@ -313,12 +289,10 @@ let prepend_scores_by_names
        tmp_names_fn output_fn tmp_csv_fn tmp_csv_fn output_fn);
   (if not verbose then Sys.remove tmp_names_fn)
 
-let prod_predict_regr
-    verbose pairs do_classification model_fn test_fn output_fn =
+let prod_predict_regr verbose pairs model_fn test_fn output_fn =
   let quiet_option = if not verbose then "-q" else "" in
   if pairs then
-    prepend_scores_by_names
-      verbose quiet_option do_classification test_fn model_fn output_fn
+    prepend_scores_by_names verbose quiet_option test_fn model_fn output_fn
   else
     Utls.run_command ~debug:verbose
       (sprintf "%s %s %s %s %s"
@@ -432,14 +406,14 @@ let read_IC50s_from_preds_fn pairs preds_fn =
   else
     LO.map preds_fn float_of_string
 
-let lines_of_file pairs2csv do_classification instance_wise_norm fn =
+let lines_of_file pairs2csv instance_wise_norm fn =
   let maybe_normalized_lines =
     if instance_wise_norm then
       LO.map fn normalize_line
     else
       LO.lines_of_file fn in
   if pairs2csv then
-    L.map (atom_pairs_line_to_csv do_classification) maybe_normalized_lines
+    L.map atom_pairs_line_to_csv maybe_normalized_lines
   else
     maybe_normalized_lines
 
@@ -532,11 +506,6 @@ let main () =
     "Svmwrap: -e and --scan-e are exclusive";
   let maybe_epsilon = CLI.get_float_opt ["-e"] args in
   let maybe_esteps = CLI.get_int_opt ["--scan-e"] args in
-  let do_regression =
-    CLI.get_set_bool ["--regr"] args ||
-    Opt.is_some maybe_epsilon || Opt.is_some maybe_esteps ||
-    Opt.is_some e_range_str in
-  let do_classification = not do_regression in
   let no_gnuplot = CLI.get_set_bool ["--no-plot"] args in
   CLI.finalize (); (* ------------------------------------------------------ *)
   let verbose = not quiet in
@@ -551,10 +520,8 @@ let main () =
   let maybe_es = decode_e_range e_range_str in
   begin match model_cmd with
     | Restore_from models_fn ->
-      if do_regression then
         begin
-          prod_predict_regr
-            verbose pairs do_classification models_fn input_fn output_fn;
+          prod_predict_regr verbose pairs models_fn input_fn output_fn;
           let acts = read_IC50s_from_train_fn pairs input_fn in
           let preds = read_IC50s_from_preds_fn pairs output_fn in
           let r2 = Cpm.RegrStats.r2 acts preds in
@@ -565,8 +532,6 @@ let main () =
              Gnuplot.regr_plot title_str acts preds
           )
         end
-      else
-        failwith "not do_regression: not implemented yet"
     | Save_into (_)
     | Discard ->
       match maybe_train_fn, maybe_valid_fn, maybe_test_fn with
@@ -575,15 +540,12 @@ let main () =
           (* randomize lines *)
           let all_lines =
             L.shuffle ~state:rng
-              (lines_of_file pairs
-                 do_classification instance_wise_norm input_fn) in
+              (lines_of_file pairs instance_wise_norm input_fn) in
             let nb_lines = L.length all_lines in
             (* partition *)
             let train_card =
               BatFloat.round_to_int (train_p *. (float nb_lines)) in
             let train, test = L.takedrop train_card all_lines in
-            if do_regression then
-              begin
                 let best_e, best_c, best_r2 =
                   let epsilons =
                     epsilon_range maybe_epsilon maybe_esteps maybe_es train in
@@ -616,7 +578,6 @@ let main () =
                 Log.info "%s" title_str;
                 if not no_gnuplot then
                   Gnuplot.regr_plot title_str actual preds
-              end
         end
       | (Some _train_fn, Some _valid_fn, Some _test_fn) ->
         failwith "not implemented yet"
