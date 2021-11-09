@@ -19,8 +19,6 @@ module Opt = BatOption
 module RNG = BatRandom.State
 module S = BatString
 
-let svm_type = 3 (* epsilon-SVR (cf. svm-train manpage) *)
-
 (* FBR: make Linear work *)
 (* FBR: make RBF work *)
 (* FBR: make Sigmoid work *)
@@ -53,6 +51,14 @@ type model_command = Restore_from of Utls.filename
                    | Save_into of Utls.filename
                    | Discard
 
+let epsilon_SVR = 3 (* cf. svm-train manpage *)
+
+(* constants to specify kernel for svm-train *)
+let int_of_kernel = function
+  | Linear -> 0
+  | RBF _gamma -> 2
+  | Sigmoid (_gamma, _r) -> 3
+
 let single_train_test_regr verbose cmd e c train test =
   let quiet_option = if not verbose then "-q" else "" in
   (* train *)
@@ -63,8 +69,8 @@ let single_train_test_regr verbose cmd e c train test =
     S.replace ~str:(train_fn ^ ".model") ~sub:"/tmp/" ~by:"" in
   assert(replaced);
   Utls.run_command ~debug:verbose
-    (sprintf "%s %s -s 11 -c %g -p %g %s %s"
-       svm_train quiet_option c e train_fn model_fn);
+    (sprintf "%s %s -s %d -c %g -p %g %s %s"
+       svm_train quiet_option epsilon_SVR c e train_fn model_fn);
   (* test *)
   let test_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_test_" ".txt" in
   LO.lines_to_file test_fn test;
