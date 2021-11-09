@@ -520,18 +520,18 @@ let main () =
   let maybe_es = decode_e_range e_range_str in
   begin match model_cmd with
     | Restore_from models_fn ->
-        begin
-          prod_predict_regr verbose pairs models_fn input_fn output_fn;
-          let acts = read_IC50s_from_train_fn pairs input_fn in
-          let preds = read_IC50s_from_preds_fn pairs output_fn in
-          let r2 = Cpm.RegrStats.r2 acts preds in
-          let rmse = Cpm.RegrStats.rmse acts preds in
-          let title_str =
-            sprintf "T=%s N=%d R2=%.3f RMSE=%.3f" input_fn (L.length preds) r2 rmse in
-          (if not no_gnuplot then
-             Gnuplot.regr_plot title_str acts preds
-          )
-        end
+      begin
+        prod_predict_regr verbose pairs models_fn input_fn output_fn;
+        let acts = read_IC50s_from_train_fn pairs input_fn in
+        let preds = read_IC50s_from_preds_fn pairs output_fn in
+        let r2 = Cpm.RegrStats.r2 acts preds in
+        let rmse = Cpm.RegrStats.rmse acts preds in
+        let title_str =
+          sprintf "T=%s N=%d R2=%.3f RMSE=%.3f" input_fn (L.length preds) r2 rmse in
+        (if not no_gnuplot then
+           Gnuplot.regr_plot title_str acts preds
+        )
+      end
     | Save_into (_)
     | Discard ->
       match maybe_train_fn, maybe_valid_fn, maybe_test_fn with
@@ -541,43 +541,43 @@ let main () =
           let all_lines =
             L.shuffle ~state:rng
               (lines_of_file pairs instance_wise_norm input_fn) in
-            let nb_lines = L.length all_lines in
-            (* partition *)
-            let train_card =
-              BatFloat.round_to_int (train_p *. (float nb_lines)) in
-            let train, test = L.takedrop train_card all_lines in
-                let best_e, best_c, best_r2 =
-                  let epsilons =
-                    epsilon_range maybe_epsilon maybe_esteps maybe_es train in
-                  if nfolds = 1 then
-                    optimize_regr verbose ncores epsilons cs train test
-                  else
-                    optimize_regr_nfolds
-                      ncores verbose nfolds epsilons cs all_lines in
-                let actual, preds =
-                  if nfolds = 1 then
-                    single_train_test_regr
-                      verbose model_cmd best_e best_c train test
-                  else
-                    let actual', preds' =
-                      single_train_test_regr_nfolds
-                        verbose nfolds ncores best_e best_c
-                        all_lines in
-                    (actual', preds') in
-                (* dump to a .act_pred file  *)
-                let act_preds = L.combine actual preds in
-                let rmse = Cpm.RegrStats.rmse actual preds in
-                LO.with_out_file output_fn (fun out ->
-                    L.iter (fun (act, pred) ->
-                        fprintf out "%f\t%f" act pred
-                      ) act_preds
-                  );
-                let title_str =
-                  sprintf "T=%s nfolds=%d e=%g C=%g R2=%.3f RMSE=%.3f"
-                    input_fn nfolds best_e best_c best_r2 rmse in
-                Log.info "%s" title_str;
-                if not no_gnuplot then
-                  Gnuplot.regr_plot title_str actual preds
+          let nb_lines = L.length all_lines in
+          (* partition *)
+          let train_card =
+            BatFloat.round_to_int (train_p *. (float nb_lines)) in
+          let train, test = L.takedrop train_card all_lines in
+          let best_e, best_c, best_r2 =
+            let epsilons =
+              epsilon_range maybe_epsilon maybe_esteps maybe_es train in
+            if nfolds = 1 then
+              optimize_regr verbose ncores epsilons cs train test
+            else
+              optimize_regr_nfolds
+                ncores verbose nfolds epsilons cs all_lines in
+          let actual, preds =
+            if nfolds = 1 then
+              single_train_test_regr
+                verbose model_cmd best_e best_c train test
+            else
+              let actual', preds' =
+                single_train_test_regr_nfolds
+                  verbose nfolds ncores best_e best_c
+                  all_lines in
+              (actual', preds') in
+          (* dump to a .act_pred file  *)
+          let act_preds = L.combine actual preds in
+          let rmse = Cpm.RegrStats.rmse actual preds in
+          LO.with_out_file output_fn (fun out ->
+              L.iter (fun (act, pred) ->
+                  fprintf out "%f\t%f" act pred
+                ) act_preds
+            );
+          let title_str =
+            sprintf "T=%s nfolds=%d e=%g C=%g R2=%.3f RMSE=%.3f"
+              input_fn nfolds best_e best_c best_r2 rmse in
+          Log.info "%s" title_str;
+          if not no_gnuplot then
+            Gnuplot.regr_plot title_str actual preds
         end
       | (Some _train_fn, Some _valid_fn, Some _test_fn) ->
         failwith "not implemented yet"
