@@ -19,16 +19,12 @@ module Opt = BatOption
 module RNG = BatRandom.State
 module S = BatString
 
-(* FBR: make Sigmoid work *)
-(* FBR: allow fixed gamma
- * FBR: allow gamma range
- * FBR: allow gamma default scan range (current) *)
-
 (* kernels we support *)
 type kernel = Linear
             | RBF of float (* gamma *)
             | Sigmoid of float * float (* (gamma, r) *)
-(*          | Polynomial of float * float * float (\* not supported because too many parameters *\) *)
+(*          | Polynomial of float * float * float
+              (\* not supported because too many parameters *\) *)
 
 type kernel_choice = Linear_K
                    | RBF_K
@@ -397,6 +393,19 @@ let decode_k_range (maybe_range_str: string option): int list =
     L.map int_of_string
       (S.split_on_char ',' range_str)
 
+let decode_g_range (maybe_range_str: string option): float list =
+  match maybe_range_str with
+  | None -> (* default gamma range *)
+    [0.00001; 0.00002; 0.00005;
+     0.0001;  0.0002;  0.0005;
+     0.001;   0.002;   0.005;
+     0.01;    0.02;    0.05;
+     0.1;     0.2;     0.5;
+     1.0;     2.0;     5.0; 10.0]
+  | Some range_str ->
+    L.map float_of_string
+      (S.split_on_char ',' range_str)
+
 (* (0 <= epsilon <= max_i(|y_i|)); according to:
    "Parameter Selection for Linear Support Vector Regression."
    Jui-Yang Hsia and Chih-Jen Lin.
@@ -426,14 +435,6 @@ let epsilon_range maybe_epsilon maybe_esteps maybe_es train =
     Log.info "(min, avg+/-std, max): %.3f %.3f+/-%.3f %.3f"
       mini avg std maxi;
     svr_epsilon_range nsteps train_pIC50s
-
-(* default gamma range *)
-let gamma_range = [0.00001; 0.00002; 0.00005;
-                   0.0001;  0.0002;  0.0005;
-                   0.001;   0.002;   0.005;
-                   0.01;    0.02;    0.05;
-                   0.1;     0.2;     0.5;
-                   1.0;     2.0;     5.0; 10.0]
 
 let read_IC50s_from_train_fn pairs train_fn =
   LO.map train_fn (get_pIC50 pairs)
@@ -473,12 +474,14 @@ let main () =
   if argc = 1 then
     (eprintf "usage: %s\n  \
               -i <filename>: training set or DB to screen\n  \
+              --feats <int>: number of features\n  \
               [-o <filename>]: predictions output file\n  \
               [-np <int>]: ncores\n  \
               [--kernel <string>] choose kernel type {Lin|RBF|Sig}\n  \
               [-c <float>]: fix C\n  \
               [-e <float>]: epsilon in the loss function of epsilon-SVR;\n  \
               (0 <= epsilon <= max_i(|y_i|))\n  \
+              [-g <float>]: fix gamma (for RBF and Sig kernels)\n  \
               [--iwn]: turn ON instance-wise-normalization\n  \
               [--no-plot]: no gnuplot\n  \
               [{-n|--NxCV} <int>]: folds of cross validation\n  \
@@ -496,10 +499,13 @@ let main () =
               [-f]: force overwriting existing model file\n  \
               [--scan-c]: scan for best C\n  \
               [--scan-e <int>]: epsilon scan #steps for SVR\n  \
+              [--scan-g]: scan for best gamma\n  \
               [--regr]: regression (SVR); also, implied by -e and --scan-e\n  \
               [--e-range <float>:<int>:<float>]: specific range for e\n  \
               (semantic=start:nsteps:stop)\n  \
               [--c-range <float,float,...>] explicit scan range for C \n  \
+              (example='0.01,0.02,0.03')\n  \
+              [--g-range <float,float,...>] explicit range for gamma \n  \
               (example='0.01,0.02,0.03')\n"
        Sys.argv.(0);
      exit 1);
@@ -538,14 +544,15 @@ let main () =
     | None -> BatRandom.State.make_self_init ()
     | Some seed -> BatRandom.State.make [|seed|] in
   let scan_C = CLI.get_set_bool ["--scan-c"] args in
+  let scan_g = CLI.get_set_bool ["--scan-g"] args in
   let fixed_c = CLI.get_float_opt ["-c"] args in
+  let fixed_g = CLI.get_float_opt ["-g"] args in
   let e_range_str = CLI.get_string_opt ["--e-range"] args in
   let c_range_str = CLI.get_string_opt ["--c-range"] args in
+  let g_range_str = CLI.get_string_opt ["--g-range"] args in
   let quiet = CLI.get_set_bool ["-q"] args in
   let verbose = (not quiet) || (CLI.get_set_bool ["-v";"--verbose"] args) in
   let instance_wise_norm = CLI.get_set_bool ["--iwn"] args in
-  Utls.enforce (not (L.mem "-e" args && L.mem "--scan-e" args))
-    "Svmwrap: -e and --scan-e are exclusive";
   let maybe_epsilon = CLI.get_float_opt ["-e"] args in
   let maybe_esteps = CLI.get_int_opt ["--scan-e"] args in
   let no_gnuplot = CLI.get_set_bool ["--no-plot"] args in
@@ -553,11 +560,14 @@ let main () =
     let default_kernel_str = "Lin" in
     kernel_choice_of_string
       (CLI.get_string_def ["--kernel"] args default_kernel_str) in
+  let num_features = CLI.get_int ["--feats"] args in
+  Utls.enforce (not (L.mem "-e" args && L.mem "--scan-e" args))
+    "Svmwrap: -e and --scan-e are exclusive";
+  Utls.enforce (not (L.mem "-c" args && L.mem "--scan-c" args))
+    "Svmwrap: -c and --scan-c are exclusive";
+  Utls.enforce (not (L.mem "-g" args && L.mem "--scan-g" args))
+    "Svmwrap: -g and --scan-g are exclusive";
   CLI.finalize (); (* ------------------------------------------------------ *)
-  let kernels = match chosen_kernel with
-    | Linear_K -> [Linear]
-    | RBF_K -> L.map (fun g -> RBF g) gamma_range
-    | Sigmoid_K -> failwith "not implemented yet" in
   (* scan C? *)
   let cs = match fixed_c with
     | Some c -> [c]
@@ -565,8 +575,22 @@ let main () =
       if scan_C || BatOption.is_some c_range_str then
         decode_c_range c_range_str
       else [1.0] in
+  (* gamma range is handled very similarly to C range *)
+  let gs = match fixed_g with
+    | Some g -> [g]
+    | None ->
+      if scan_g || BatOption.is_some g_range_str then
+        decode_g_range g_range_str
+      else
+        (* default gamma value; from svm-train documentation *)
+        let default_gamma = 1.0 /. (float num_features) in
+        [default_gamma] in
   (* e-range? *)
   let maybe_es = decode_e_range e_range_str in
+  let kernels = match chosen_kernel with
+    | Linear_K -> [Linear]
+    | RBF_K -> L.map (fun g -> RBF g) gs
+    | Sigmoid_K -> failwith "Sigmoid_K: not implemented yet" in
   begin match model_cmd with
     | Restore_from models_fn ->
       begin
