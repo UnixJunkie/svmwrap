@@ -413,6 +413,13 @@ let decode_g_range (maybe_range_str: string option): float list =
     L.map float_of_string
       (S.split_on_char ',' range_str)
 
+let decode_r_range (maybe_range_str: string option): float list =
+  match maybe_range_str with
+  | None -> failwith "Svmwrap.decode_r_range: there is no default range for r"
+  | Some range_str ->
+    L.map float_of_string
+      (S.split_on_char ',' range_str)
+
 (* (0 <= epsilon <= max_i(|y_i|)); according to:
    "Parameter Selection for Linear Support Vector Regression."
    Jui-Yang Hsia and Chih-Jen Lin.
@@ -489,6 +496,7 @@ let main () =
               [-e <float>]: epsilon in the loss function of epsilon-SVR;\n  \
               (0 <= epsilon <= max_i(|y_i|))\n  \
               [-g <float>]: fix gamma (for RBF and Sig kernels)\n  \
+              [-r <float>]: fix r for the Sig kernel\n  \
               [--iwn]: turn ON instance-wise-normalization\n  \
               [--no-plot]: no gnuplot\n  \
               [{-n|--NxCV} <int>]: folds of cross validation\n  \
@@ -513,6 +521,8 @@ let main () =
               [--c-range <float,float,...>] explicit scan range for C \n  \
               (example='0.01,0.02,0.03')\n  \
               [--g-range <float,float,...>] explicit range for gamma \n  \
+              (example='0.01,0.02,0.03')\n  \
+              [--r-range <float,float,...>] explicit range for r \n  \
               (example='0.01,0.02,0.03')\n"
        Sys.argv.(0);
      exit 1);
@@ -554,9 +564,11 @@ let main () =
   let scan_g = CLI.get_set_bool ["--scan-g"] args in
   let fixed_c = CLI.get_float_opt ["-c"] args in
   let fixed_g = CLI.get_float_opt ["-g"] args in
+  let fixed_r = CLI.get_float_opt ["-r"] args in
   let e_range_str = CLI.get_string_opt ["--e-range"] args in
   let c_range_str = CLI.get_string_opt ["--c-range"] args in
   let g_range_str = CLI.get_string_opt ["--g-range"] args in
+  let r_range_str = CLI.get_string_opt ["--r-range"] args in
   let quiet = CLI.get_set_bool ["-q"] args in
   let verbose = (not quiet) || (CLI.get_set_bool ["-v";"--verbose"] args) in
   let instance_wise_norm = CLI.get_set_bool ["--iwn"] args in
@@ -589,15 +601,26 @@ let main () =
       if scan_g || BatOption.is_some g_range_str then
         decode_g_range g_range_str
       else
-        (* default gamma value; from svm-train documentation *)
+        (* default value from svm-train documentation *)
         let default_gamma = 1.0 /. (float num_features) in
         [default_gamma] in
+  (* r range; only used by the sigmoid and polynomial kernels *)
+  let rs = match fixed_r with
+    | Some r -> [r]
+    | None ->
+      if BatOption.is_some r_range_str then
+        decode_r_range r_range_str
+      else
+        (* default value from svm-train documentation *)
+        [0.0] in
   (* e-range? *)
   let maybe_es = decode_e_range e_range_str in
   let kernels = match chosen_kernel with
     | Linear_K -> [Linear]
     | RBF_K -> L.map (fun g -> RBF g) gs
-    | Sigmoid_K -> failwith "Sigmoid_K: not implemented yet" in
+    | Sigmoid_K ->
+      let grs = L.cartesian_product gs rs in
+      L.map (fun (g, r) -> Sigmoid (g, r)) grs in
   begin match model_cmd with
     | Restore_from models_fn ->
       begin
