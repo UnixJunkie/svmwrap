@@ -19,14 +19,27 @@ module Opt = BatOption
 module RNG = BatRandom.State
 module S = BatString
 
-(* FBR: make RBF work *)
 (* FBR: make Sigmoid work *)
+(* FBR: allow fixed gamma
+ * FBR: allow gamma range
+ * FBR: allow gamma default scan range (current) *)
 
 (* kernels we support *)
 type kernel = Linear
             | RBF of float (* gamma *)
             | Sigmoid of float * float (* (gamma, r) *)
 (*          | Polynomial of float * float * float (\* not supported because too many parameters *\) *)
+
+type kernel_choice = Linear_K
+                   | RBF_K
+                   | Sigmoid_K
+
+let kernel_choice_of_string = function
+  | "Lin" -> Linear_K
+  | "RBF" -> RBF_K
+  | "Sigmoid" -> Sigmoid_K
+  | x -> failwith
+           (sprintf "Svmwrap.kernel_choice_of_string: unsupported: %s" x)
 
 let svm_train, svm_predict =
   (* names on Linux *)
@@ -133,7 +146,6 @@ let increment_feat_indexes features =
      (L.length feat_vals) features res; *)
   Buffer.contents buff
 
-(* FBR: update to libsvm-tools format *)
 (* liblinear line format:
    '-80.56 1:7 2:5 3:8 4:5 5:5 6:4 7:6 8:3 9:5 10:4 11:2'
    molenc line format:
@@ -421,7 +433,7 @@ let gamma_range = [0.00001; 0.00002; 0.00005;
                    0.001;   0.002;   0.005;
                    0.01;    0.02;    0.05;
                    0.1;     0.2;     0.5;
-                   1.0; 2.0; 5.0; 10.0]
+                   1.0;     2.0;     5.0; 10.0]
 
 let read_IC50s_from_train_fn pairs train_fn =
   LO.map train_fn (get_pIC50 pairs)
@@ -463,6 +475,7 @@ let main () =
               -i <filename>: training set or DB to screen\n  \
               [-o <filename>]: predictions output file\n  \
               [-np <int>]: ncores\n  \
+              [--kernel <string>] choose kernel type {Lin|RBF|Sig}\n  \
               [-c <float>]: fix C\n  \
               [-e <float>]: epsilon in the loss function of epsilon-SVR;\n  \
               (0 <= epsilon <= max_i(|y_i|))\n  \
@@ -536,8 +549,15 @@ let main () =
   let maybe_epsilon = CLI.get_float_opt ["-e"] args in
   let maybe_esteps = CLI.get_int_opt ["--scan-e"] args in
   let no_gnuplot = CLI.get_set_bool ["--no-plot"] args in
+  let chosen_kernel =
+    let default_kernel_str = "Lin" in
+    kernel_choice_of_string
+      (CLI.get_string_def ["--kernel"] args default_kernel_str) in
   CLI.finalize (); (* ------------------------------------------------------ *)
-  let kernels = [Linear] in (* default kernel *)
+  let kernels = match chosen_kernel with
+    | Linear_K -> [Linear]
+    | RBF_K -> L.map (fun g -> RBF g) gamma_range
+    | Sigmoid_K -> failwith "not implemented yet" in
   (* scan C? *)
   let cs = match fixed_c with
     | Some c -> [c]
@@ -602,8 +622,9 @@ let main () =
                 ) act_preds
             );
           let title_str =
-            sprintf "T=%s nfolds=%d e=%g C=%g R2=%.3f RMSE=%.3f"
-              input_fn nfolds best_e best_c best_r2 rmse in
+            sprintf "nfolds=%d K=%s e=%g C=%g R2=%.3f RMSE=%.3f T=%s"
+              nfolds (human_readable_string_of_kernel best_K)
+              best_e best_c best_r2 rmse input_fn in
           Log.info "%s" title_str;
           if not no_gnuplot then
             Gnuplot.regr_plot title_str actual preds
