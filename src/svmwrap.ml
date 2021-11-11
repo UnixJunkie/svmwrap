@@ -65,6 +65,11 @@ let string_of_kernel k =
   | RBF gamma -> sprintf "-t %d -g %f" k_const gamma
   | Sigmoid (gamma, r) -> sprintf "-t %d -g %g -r %g" k_const gamma r
 
+let human_readable_string_of_kernel = function
+  | Linear -> "Lin"
+  | RBF gamma -> sprintf "RBF(%g)" gamma
+  | Sigmoid (gamma, r) -> sprintf "Sig(%g,%g)" gamma r
+
 let single_train_test_regr verbose cmd kernel e c train test =
   let quiet_option = if not verbose then "-q" else "" in
   (* train *)
@@ -197,37 +202,38 @@ let cv_folds n l =
 (* find best (e, C) configuration by R2 maximization *)
 let best_r2 l =
   L.fold_left (fun
-                ((_best_e, _best_c, best_r2) as best)
-                ((_curr_e, _curr_c, curr_r2) as new_best) ->
+                ((_best_e, _best_c, _best_K, best_r2) as best)
+                ((_curr_e, _curr_c, _best_K, curr_r2) as new_best) ->
                 if best_r2 >= curr_r2 then
                   best
                 else
                   new_best
-              ) (0.0, 0.0, 0.0) l
+              ) (0.0, 0.0, Linear, 0.0) l
 
-let log_R2 e c r2 =
-  (if      r2 < 0.3 then Log.error
+let log_R2 e c kernel r2 =
+  (if r2 < 0.3 then Log.error
    else if r2 < 0.5 then Log.warn
-   else                  Log.info) "(e, C, R2) = %g %g %.3f" e c r2
+   else Log.info) "(e,C,K,R2) = %g %g %s %.3f"
+    e c (human_readable_string_of_kernel kernel) r2
 
-(* return the best parameter configuration (epsilon, C) found *)
-let optimize_regr verbose ncores kernel es cs train test =
-  let ecs = L.cartesian_product es cs in
-  let e_c_r2s =
-    Parany.Parmap.parmap ncores (fun (e, c) ->
+(* return the best parameter configuration (epsilon, C, kernel) found *)
+let optimize_regr verbose ncores kernels es cs train test =
+  let ecks = L.cartesian_product (L.cartesian_product es cs) kernels in
+  let e_c_k_r2s =
+    Parany.Parmap.parmap ncores (fun ((e, c), kernel) ->
         let act, preds = single_train_test_regr verbose Discard kernel e c train test in
         let r2 = Cpm.RegrStats.r2 act preds in
-        log_R2 e c r2;
-        (e, c, r2)
-      ) ecs in
-  best_r2 e_c_r2s
+        log_R2 e c kernel r2;
+        (e, c, kernel, r2)
+      ) ecks in
+  best_r2 e_c_k_r2s
 
 (* like optimize_regr, but using NxCV *)
-let optimize_regr_nfolds ncores verbose nfolds kernel es cs train =
+let optimize_regr_nfolds ncores verbose nfolds kernels es cs train =
   let train_tests = Cpm.Utls.cv_folds nfolds train in
-  let ecs = L.cartesian_product es cs in
-  let e_c_r2s =
-    Parany.Parmap.parmap ncores (fun (e, c) ->
+  let ecks = L.cartesian_product (L.cartesian_product es cs) kernels in
+  let e_c_k_r2s =
+    Parany.Parmap.parmap ncores (fun ((e, c), kernel) ->
         let all_act_preds =
           L.map (fun (train', test') ->
               single_train_test_regr verbose Discard kernel e c train' test'
@@ -236,10 +242,10 @@ let optimize_regr_nfolds ncores verbose nfolds kernel es cs train =
           let xs, ys = L.split all_act_preds in
           (L.concat xs, L.concat ys) in
         let r2 = Cpm.RegrStats.r2 acts preds in
-        log_R2 e c r2;
-        (e, c, r2)
-      ) ecs in
-  best_r2 e_c_r2s
+        log_R2 e c kernel r2;
+        (e, c, kernel, r2)
+      ) ecks in
+  best_r2 e_c_k_r2s
 
 let single_train_test_regr_nfolds verbose nfolds nprocs kernel e c train =
   let train_tests = Cpm.Utls.cv_folds nfolds train in
@@ -531,7 +537,7 @@ let main () =
   let maybe_esteps = CLI.get_int_opt ["--scan-e"] args in
   let no_gnuplot = CLI.get_set_bool ["--no-plot"] args in
   CLI.finalize (); (* ------------------------------------------------------ *)
-  let kernel = Linear in (* default kernel *)
+  let kernels = [Linear] in (* default kernel *)
   (* scan C? *)
   let cs = match fixed_c with
     | Some c -> [c]
@@ -569,22 +575,22 @@ let main () =
           let train_card =
             BatFloat.round_to_int (train_p *. (float nb_lines)) in
           let train, test = L.takedrop train_card all_lines in
-          let best_e, best_c, best_r2 =
+          let best_e, best_c, best_K, best_r2 =
             let epsilons =
               epsilon_range maybe_epsilon maybe_esteps maybe_es train in
             if nfolds = 1 then
-              optimize_regr verbose ncores kernel epsilons cs train test
+              optimize_regr verbose ncores kernels epsilons cs train test
             else
               optimize_regr_nfolds
-                ncores verbose nfolds kernel epsilons cs all_lines in
+                ncores verbose nfolds kernels epsilons cs all_lines in
           let actual, preds =
             if nfolds = 1 then
               single_train_test_regr
-                verbose model_cmd kernel best_e best_c train test
+                verbose model_cmd best_K best_e best_c train test
             else
               let actual', preds' =
                 single_train_test_regr_nfolds
-                  verbose nfolds ncores kernel best_e best_c
+                  verbose nfolds ncores best_K best_e best_c
                   all_lines in
               (actual', preds') in
           (* dump to a .act_pred file  *)
