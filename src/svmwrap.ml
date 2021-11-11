@@ -240,10 +240,17 @@ let optimize_regr verbose ncores kernels es cs train test =
 let optimize_regr_nfolds ncores verbose nfolds kernels es cs train =
   let train_tests = Cpm.Utls.cv_folds nfolds train in
   let ecks = L.cartesian_product (L.cartesian_product es cs) kernels in
+  let n_configs = L.length ecks in
+  let configs_mapper, folds_mapper =
+    (* what can parallelize more? *)
+    if n_configs > nfolds then
+      (Parany.Parmap.parmap ncores, L.map)
+    else
+      (L.map, Parany.Parmap.parmap ncores) in
   let e_c_k_r2s =
-    Parany.Parmap.parmap ncores (fun ((e, c), kernel) ->
+    configs_mapper (fun ((e, c), kernel) ->
         let all_act_preds =
-          L.map (fun (train', test') ->
+          folds_mapper (fun (train', test') ->
               single_train_test_regr verbose Discard kernel e c train' test'
             ) train_tests in
         let acts, preds =
