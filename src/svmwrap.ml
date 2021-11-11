@@ -71,7 +71,7 @@ let string_of_kernel k =
   let k_const = int_of_kernel k in
   match k with
   | Linear -> sprintf "-t %d" k_const
-  | RBF gamma -> sprintf "-t %d -g %f" k_const gamma
+  | RBF gamma -> sprintf "-t %d -g %g" k_const gamma
   | Sigmoid (gamma, r) -> sprintf "-t %d -g %g -r %g" k_const gamma r
 
 let human_readable_string_of_kernel = function
@@ -622,13 +622,13 @@ let main () =
           let best_e, best_c, best_K, best_r2 =
             let epsilons =
               epsilon_range maybe_epsilon maybe_esteps maybe_es train in
-            if nfolds = 1 then
+            if nfolds <= 1 then
               optimize_regr verbose ncores kernels epsilons cs train test
             else
               optimize_regr_nfolds
                 ncores verbose nfolds kernels epsilons cs all_lines in
           let actual, preds =
-            if nfolds = 1 then
+            if nfolds <= 1 then
               single_train_test_regr
                 verbose model_cmd best_K best_e best_c train test
             else
