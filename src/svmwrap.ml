@@ -593,7 +593,9 @@ let main () =
     | None ->
       if scan_C || BatOption.is_some c_range_str then
         decode_c_range c_range_str
-      else [1.0] in
+      else
+        (* default value from svm-train documentation *)
+        [1.0] in
   (* gamma range is handled very similarly to C range *)
   let gs = match fixed_g with
     | Some g -> [g]
