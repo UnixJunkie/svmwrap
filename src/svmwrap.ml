@@ -539,10 +539,12 @@ let apply_norm_params_AP_line params line =
   let buff = Buffer.create 80 in
   bprintf buff "%f" dep_var;
   Molenc.Fingerprint.kv_iter (fun k v ->
-      (* libsvm_fst_idx=1 scale(value) *)
       let mini, maxi = Ht.find_default ht k def_val in
-      bprintf buff " %d:%g" (k + 1)
-        ((float (v - mini)) /. (float (maxi - mini)))
+      let scaled =
+        if maxi = mini then 0.0
+        else float (v - mini) /. float (maxi - mini) in
+      (* libsvm_fst_idx=1 scale(value) *)
+      bprintf buff " %d:%g" (k + 1) scaled
     ) fp;
   (* DON'T terminate with '\n' the line *)
   Buffer.contents buff
@@ -624,6 +626,7 @@ let main () =
               (example='0.01,0.02,0.03')\n"
        Sys.argv.(0);
      exit 1);
+  if CLI.get_set_bool ["-v"] args then Log.(set_log_level DEBUG);
   let input_fn, was_compressed =
     let input_fn' = CLI.get_string_def ["-i"] args "/dev/null" in
     maybe_uncompress input_fn' in
