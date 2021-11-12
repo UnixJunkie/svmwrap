@@ -505,7 +505,7 @@ type norm_params = { global_min: int;
                      min_max_ht: (int, (int * int)) Ht.t }
 
 (* for each feature, extract min and max values *)
-let extract_norm_params_AP_lines num_features l =
+let extract_norm_params_AP_lines num_features lines =
   let ht = Ht.create num_features in
   let glob_min = ref max_int in
   let glob_max = ref min_int in
@@ -522,18 +522,43 @@ let extract_norm_params_AP_lines num_features l =
             Ht.replace ht k (min prev_min v, max prev_max v)
           with Not_found -> Ht.add ht k (v, v)
         ) fp
-  ) l;
+  ) lines;
   { global_min = !glob_min; global_max = !glob_max; min_max_ht = ht }
+
+(* scale values in [0:1] *)
+let apply_norm_params_AP_line params line =
+  let glob_min = params.global_min in
+  let glob_max = params.global_max in
+  let def_val = (glob_min, glob_max) in
+  let ht = params.min_max_ht in
+  let fp_mol =
+    let ignore_index = 0 in
+    Molenc.FpMol.parse_one ignore_index line in
+  let dep_var = FpMol.get_value fp_mol in
+  let fp = FpMol.get_fp fp_mol in
+  let buff = Buffer.create 80 in
+  bprintf buff "%f" dep_var;
+  Molenc.Fingerprint.kv_iter (fun k v ->
+      (* libsvm_fst_idx=1 scale(value) *)
+      let mini, maxi = Ht.find_default ht k def_val in
+      bprintf buff " %d:%g" (k + 1)
+        ((float (v - mini)) /. (float (maxi - mini)))
+    ) fp;
+  (* DON'T terminate with '\n' the line *)
+  Buffer.contents buff
 
 type normalization = IWN (* instance-wise normalization *)
                    | Scaled (* scaled to fall in [0:1] *)
                    | None
 
-let lines_of_file pairs2csv normalize fn =
+let lines_of_file num_features pairs2csv normalize fn =
   let all_lines = LO.lines_of_file fn in
   if pairs2csv then
     match normalize with
-    | Scaled -> failwith "not implemented yet"
+    | Scaled ->
+      let norm_params =
+        extract_norm_params_AP_lines num_features all_lines in
+      L.map (apply_norm_params_AP_line norm_params) all_lines
     | IWN -> L.map instance_wise_norm_AP_line all_lines
     | None -> L.map atom_pairs_line_to_csv all_lines
   else
@@ -570,7 +595,7 @@ let main () =
               [-g <float>]: fix gamma (for RBF and Sig kernels)\n  \
               [-r <float>]: fix r for the Sig kernel\n  \
               [--iwn]: turn ON instance-wise-normalization\n  \
-              [--scale]: turn ON [0:1] scaling\n  \
+              [--scale]: turn ON [0:1] scaling (NOT PRODUCTION READY)\n  \
               [--no-plot]: no gnuplot\n  \
               [{-n|--NxCV} <int>]: folds of cross validation\n  \
               [-q]: quiet\n  \
@@ -735,7 +760,7 @@ let main () =
           (* randomize lines *)
           let all_lines =
             L.shuffle ~state:rng
-              (lines_of_file pairs normalize input_fn) in
+              (lines_of_file num_features pairs normalize input_fn) in
           let nb_lines = L.length all_lines in
           (* partition *)
           let train_card =
