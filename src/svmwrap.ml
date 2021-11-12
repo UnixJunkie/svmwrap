@@ -509,7 +509,7 @@ let main () =
               --feats <int>: number of features\n  \
               [-o <filename>]: predictions output file\n  \
               [-np <int>]: ncores\n  \
-              [--kernel <string>] choose kernel type {Lin|RBF|Sig}\n  \
+              [--kernel <string>] choose kernel type {Lin|RBF|Sig|Pol}\n  \
               [-c <float>]: fix C\n  \
               [-e <float>]: epsilon in the loss function of epsilon-SVR;\n  \
               (0 <= epsilon <= max_i(|y_i|))\n  \
