@@ -41,6 +41,7 @@ let kernel_choice_of_string = function
   | "Lin" -> Lin_K
   | "RBF" -> RBF_K
   | "Sig" -> Sig_K
+  | "Pol" -> Pol_K
   | x -> failwith
            (sprintf "Svmwrap.kernel_choice_of_string: unsupported: %s" x)
 
