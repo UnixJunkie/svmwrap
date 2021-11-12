@@ -8,13 +8,13 @@
 
 open Printf
 
-module A = BatArray
 module CLI = Minicli.CLI
 module Fn = Filename
 module FpMol = Molenc.FpMol
+module Ht = BatHashtbl
 module L = BatList
-module Log = Dolog.Log
 module LO = Line_oriented
+module Log = Dolog.Log
 module Opt = BatOption
 module RNG = BatRandom.State
 module S = BatString
@@ -498,6 +498,27 @@ let instance_wise_norm_AP_line l =
     ) fp;
   (* DON'T terminate with '\n' the line *)
   Buffer.contents buff
+
+type norm_params = { global_min: int;
+                     global_max: int;
+                     min_max_ht: (int, (int * int)) Ht.t }
+
+(* for each feature, extract min and max values *)
+let extract_norm_params_AP_lines num_features l =
+  let ht = Ht.create num_features in
+  let glob_min = ref max_int in
+  let glob_max = ref min_int in
+  L.iter (fun line ->
+      let fp_mol =
+        let ignore_index = 0 in
+        Molenc.FpMol.parse_one ignore_index line in
+      let fp = FpMol.get_fp fp_mol in
+      Molenc.Fingerprint.kv_iter (fun _k v ->
+          if v < !glob_min then glob_min := v;
+          if v > !glob_max then glob_max := v
+        ) fp
+  ) l;
+  { global_min = !glob_min; global_max = !glob_max; min_max_ht = ht }
 
 let lines_of_file pairs2csv instance_wise_norm fn =
   let all_lines = LO.lines_of_file fn in
