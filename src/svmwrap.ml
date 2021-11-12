@@ -33,7 +33,7 @@ type kernel_choice = Linear_K
 let kernel_choice_of_string = function
   | "Lin" -> Linear_K
   | "RBF" -> RBF_K
-  | "Sigmoid" -> Sigmoid_K
+  | "Sig" -> Sigmoid_K
   | x -> failwith
            (sprintf "Svmwrap.kernel_choice_of_string: unsupported: %s" x)
 
