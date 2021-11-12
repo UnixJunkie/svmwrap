@@ -241,7 +241,8 @@ let optimize_regr verbose ncores kernels es cs train test =
   let ecks = L.cartesian_product (L.cartesian_product es cs) kernels in
   let e_c_k_r2s =
     Parany.Parmap.parmap ncores (fun ((e, c), kernel) ->
-        let act, preds = single_train_test_regr verbose Discard kernel e c train test in
+        let act, preds =
+          single_train_test_regr verbose Discard kernel e c train test in
         let r2 = Cpm.RegrStats.r2 act preds in
         log_R2 e c kernel r2;
         (e, c, kernel, r2)
@@ -286,6 +287,7 @@ let single_train_test_regr_nfolds verbose nfolds nprocs kernel e c train =
   (L.concat xs, L.concat ys)
 
 (* instance-wise normalization *)
+(* WARNING: this function expects the data to already be in svm-train format *)
 let normalize_line l =
   let tokens = S.split_on_char ' ' l in
   match tokens with
@@ -479,16 +481,38 @@ let read_IC50s_from_preds_fn pairs preds_fn =
   else
     LO.map preds_fn robust_float_of_string
 
+(* convert an atom-pair line to svm-train csv format plus applies
+ * instance-wise normalization *)
+let instance_wise_norm_AP_line l =
+  let fp_mol =
+    let ignore_index = 0 in
+    Molenc.FpMol.parse_one ignore_index l in
+  let dep_var = FpMol.get_value fp_mol in
+  let fp = FpMol.get_fp fp_mol in
+  let sum_values = float (Molenc.Fingerprint.sum_values fp) in
+  let buff = Buffer.create 80 in
+  bprintf buff "%f" dep_var;
+  Molenc.Fingerprint.kv_iter (fun k v ->
+      (* libsvm_fst_idx=1 IWN(falue) *)
+      bprintf buff " %d:%g" (k + 1) ((float v) /. sum_values)
+    ) fp;
+  (* DON'T terminate with '\n' the line *)
+  Buffer.contents buff
+
 let lines_of_file pairs2csv instance_wise_norm fn =
-  let maybe_normalized_lines =
-    if instance_wise_norm then
-      LO.map fn normalize_line
-    else
-      LO.lines_of_file fn in
+  let all_lines = LO.lines_of_file fn in
   if pairs2csv then
-    L.map atom_pairs_line_to_csv maybe_normalized_lines
+    (if instance_wise_norm then
+       L.map instance_wise_norm_AP_line all_lines
+     else
+       L.map atom_pairs_line_to_csv all_lines
+    )
   else
-    maybe_normalized_lines
+    (if instance_wise_norm then
+       L.map normalize_line all_lines
+     else
+       all_lines
+    )
 
 (* uncompress file if needed
    return (uncompressed_fn, was_compressed) *)
