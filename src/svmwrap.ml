@@ -19,7 +19,7 @@ module Opt = BatOption
 module RNG = BatRandom.State
 module S = BatString
 
-(* FBR: exploit this one *)
+(* float_of_string doesn't parse the scientific notation ! *)
 let robust_float_of_string s =
   try Scanf.sscanf s "%f" (fun x -> x)
   with exn ->
@@ -130,7 +130,7 @@ let single_train_test_regr verbose cmd kernel e c train test =
            L.iter (Sys.remove) [train_fn; test_fn; preds_fn])
       end
   end;
-  let pred_values = L.map float_of_string pred_lines in
+  let pred_values = L.map robust_float_of_string pred_lines in
   (actual_values, pred_values)
 
 (* liblinear wants first feature index=1 instead of 0 *)
@@ -174,7 +174,8 @@ let liblinear_line_to_FpMol index l =
            raise exn)
       ) feat_vals;
     Buffer.add_char buff ']';
-    FpMol.create name index (float_of_string ic50) (Buffer.contents buff)
+    FpMol.create name index (robust_float_of_string ic50)
+      (Buffer.contents buff)
 
 let atom_pairs_line_to_csv line =
   (* Example for classification:
@@ -398,7 +399,7 @@ let decode_c_range (maybe_range_str: string option): float list =
      1.; 2.; 5.;
      10.; 20.; 50.]
   | Some range_str ->
-    L.map float_of_string
+    L.map robust_float_of_string
       (S.split_on_char ',' range_str)
 
 let decode_k_range (maybe_range_str: string option): int list =
@@ -420,14 +421,14 @@ let decode_g_range (maybe_range_str: string option): float list =
      0.1;     0.2;     0.5;
      1.0;     2.0;     5.0; 10.0]
   | Some range_str ->
-    L.map float_of_string
+    L.map robust_float_of_string
       (S.split_on_char ',' range_str)
 
 let decode_r_range (maybe_range_str: string option): float list =
   match maybe_range_str with
   | None -> failwith "Svmwrap.decode_r_range: no default range"
   | Some range_str ->
-    L.map float_of_string
+    L.map robust_float_of_string
       (S.split_on_char ',' range_str)
 
 let decode_d_range (maybe_range_str: string option): int list =
@@ -475,7 +476,7 @@ let read_IC50s_from_preds_fn pairs preds_fn =
     LO.map preds_fn
       (fun line -> Scanf.sscanf line "%s@\t%f" (fun _name score -> score))
   else
-    LO.map preds_fn float_of_string
+    LO.map preds_fn robust_float_of_string
 
 let lines_of_file pairs2csv instance_wise_norm fn =
   let maybe_normalized_lines =
