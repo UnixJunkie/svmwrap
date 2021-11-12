@@ -501,6 +501,7 @@ let instance_wise_norm_AP_line l =
 
 type norm_params = { global_min: int;
                      global_max: int;
+                     (* LUT: feature -> (min_val, max_val) *)
                      min_max_ht: (int, (int * int)) Ht.t }
 
 (* for each feature, extract min and max values *)
@@ -513,9 +514,13 @@ let extract_norm_params_AP_lines num_features l =
         let ignore_index = 0 in
         Molenc.FpMol.parse_one ignore_index line in
       let fp = FpMol.get_fp fp_mol in
-      Molenc.Fingerprint.kv_iter (fun _k v ->
+      Molenc.Fingerprint.kv_iter (fun k v ->
           if v < !glob_min then glob_min := v;
-          if v > !glob_max then glob_max := v
+          if v > !glob_max then glob_max := v;
+          try
+            let prev_min, prev_max = Ht.find ht k in
+            Ht.replace ht k (min prev_min v, max prev_max v)
+          with Not_found -> Ht.add ht k (v, v)
         ) fp
   ) l;
   { global_min = !glob_min; global_max = !glob_max; min_max_ht = ht }
