@@ -19,21 +19,28 @@ module Opt = BatOption
 module RNG = BatRandom.State
 module S = BatString
 
+(* FBR: exploit this one *)
+let robust_float_of_string s =
+  try Scanf.sscanf s "%f" (fun x -> x)
+  with exn ->
+    (Log.fatal "Svmwrap.robust_float_of_string: could not parse: %s" s;
+     raise exn)
+
 (* kernels we support *)
 type kernel = Linear
             | RBF of float (* gamma *)
             | Sigmoid of float * float (* (gamma, r) *)
-(*          | Polynomial of float * float * float
-              (\* not supported because too many parameters *\) *)
+            | Polynomial of float * float * int (* (gamma, r, degree) *)
 
-type kernel_choice = Linear_K
+type kernel_choice = Lin_K
                    | RBF_K
-                   | Sigmoid_K
+                   | Sig_K
+                   | Pol_K
 
 let kernel_choice_of_string = function
-  | "Lin" -> Linear_K
+  | "Lin" -> Lin_K
   | "RBF" -> RBF_K
-  | "Sig" -> Sigmoid_K
+  | "Sig" -> Sig_K
   | x -> failwith
            (sprintf "Svmwrap.kernel_choice_of_string: unsupported: %s" x)
 
@@ -64,20 +71,23 @@ let epsilon_SVR = 3 (* cf. svm-train manpage *)
 (* constants to specify kernel for svm-train *)
 let int_of_kernel = function
   | Linear -> 0
-  | RBF _gamma -> 2
-  | Sigmoid (_gamma, _r) -> 3
+  | Polynomial (_g, _r, _d) -> 1
+  | RBF _g -> 2
+  | Sigmoid (_g, _r) -> 3
 
 let string_of_kernel k =
   let k_const = int_of_kernel k in
   match k with
   | Linear -> sprintf "-t %d" k_const
-  | RBF gamma -> sprintf "-t %d -g %g" k_const gamma
-  | Sigmoid (gamma, r) -> sprintf "-t %d -g %g -r %g" k_const gamma r
+  | RBF g -> sprintf "-t %d -g %g" k_const g
+  | Sigmoid (g, r) -> sprintf "-t %d -g %g -r %g" k_const g r
+  | Polynomial (g, r, d) -> sprintf "-t %d -g %g -r %g -d %d" k_const g r d
 
 let human_readable_string_of_kernel = function
   | Linear -> "Lin"
-  | RBF gamma -> sprintf "RBF(%g)" gamma
-  | Sigmoid (gamma, r) -> sprintf "Sig(%g,%g)" gamma r
+  | RBF g -> sprintf "RBF(%g)" g
+  | Sigmoid (g, r) -> sprintf "Sig(%g,%g)" g r
+  | Polynomial (g, r, d) -> sprintf "Pol(%g,%g,%d)" g r d
 
 let single_train_test_regr verbose cmd kernel e c train test =
   let quiet_option = if not verbose then "-q" else "" in
@@ -415,9 +425,16 @@ let decode_g_range (maybe_range_str: string option): float list =
 
 let decode_r_range (maybe_range_str: string option): float list =
   match maybe_range_str with
-  | None -> failwith "Svmwrap.decode_r_range: there is no default range for r"
+  | None -> failwith "Svmwrap.decode_r_range: no default range"
   | Some range_str ->
     L.map float_of_string
+      (S.split_on_char ',' range_str)
+
+let decode_d_range (maybe_range_str: string option): int list =
+  match maybe_range_str with
+  | None -> failwith "Svmwrap.decode_d_range: no default range"
+  | Some range_str ->
+    L.map int_of_string
       (S.split_on_char ',' range_str)
 
 (* (0 <= epsilon <= max_i(|y_i|)); according to:
@@ -565,10 +582,12 @@ let main () =
   let fixed_c = CLI.get_float_opt ["-c"] args in
   let fixed_g = CLI.get_float_opt ["-g"] args in
   let fixed_r = CLI.get_float_opt ["-r"] args in
+  let fixed_d = CLI.get_int_opt ["-d"] args in
   let e_range_str = CLI.get_string_opt ["--e-range"] args in
   let c_range_str = CLI.get_string_opt ["--c-range"] args in
   let g_range_str = CLI.get_string_opt ["--g-range"] args in
   let r_range_str = CLI.get_string_opt ["--r-range"] args in
+  let d_range_str = CLI.get_string_opt ["--d-range"] args in
   let quiet = CLI.get_set_bool ["-q"] args in
   let verbose = (not quiet) || (CLI.get_set_bool ["-v";"--verbose"] args) in
   let instance_wise_norm = CLI.get_set_bool ["--iwn"] args in
@@ -586,11 +605,12 @@ let main () =
     "Svmwrap: -c and --scan-c are exclusive";
   Utls.enforce (not (L.mem "-g" args && L.mem "--scan-g" args))
     "Svmwrap: -g and --scan-g are exclusive";
-  CLI.finalize (); (* ------------------------------------------------------ *)
+  CLI.finalize (); (* ----------------------------------------------------- *)
   (* scan C? *)
   let cs = match fixed_c with
     | Some c -> [c]
     | None ->
+      (* FBR: some refacto here *)
       if scan_C || BatOption.is_some c_range_str then
         decode_c_range c_range_str
       else
@@ -600,6 +620,7 @@ let main () =
   let gs = match fixed_g with
     | Some g -> [g]
     | None ->
+      (* FBR: some refacto here *)
       if scan_g || BatOption.is_some g_range_str then
         decode_g_range g_range_str
       else
@@ -610,19 +631,33 @@ let main () =
   let rs = match fixed_r with
     | Some r -> [r]
     | None ->
+      (* FBR: some refacto here *)
       if BatOption.is_some r_range_str then
         decode_r_range r_range_str
       else
         (* default value from svm-train documentation *)
         [0.0] in
+  (* d range; only used by the polynomial kernel *)
+  let ds = match fixed_d with
+    | Some d -> [d]
+    | None ->
+      (* FBR: some refacto here *)
+      if BatOption.is_some d_range_str then
+        decode_d_range d_range_str
+      else
+        (* default value from svm-train documentation *)
+        [3] in
   (* e-range? *)
   let maybe_es = decode_e_range e_range_str in
   let kernels = match chosen_kernel with
-    | Linear_K -> [Linear]
+    | Lin_K -> [Linear]
     | RBF_K -> L.map (fun g -> RBF g) gs
-    | Sigmoid_K ->
+    | Sig_K ->
       let grs = L.cartesian_product gs rs in
-      L.map (fun (g, r) -> Sigmoid (g, r)) grs in
+      L.map (fun (g, r) -> Sigmoid (g, r)) grs
+    | Pol_K ->
+      let grds = L.cartesian_product (L.cartesian_product gs rs) ds in
+      L.map (fun ((g, r), d) -> Polynomial (g, r, d)) grds in
   begin match model_cmd with
     | Restore_from models_fn ->
       begin
@@ -632,7 +667,8 @@ let main () =
         let r2 = Cpm.RegrStats.r2 acts preds in
         let rmse = Cpm.RegrStats.rmse acts preds in
         let title_str =
-          sprintf "T=%s N=%d R2=%.3f RMSE=%.3f" input_fn (L.length preds) r2 rmse in
+          sprintf "N=%d R2=%.3f RMSE=%.3f T=%s"
+            (L.length preds) r2 rmse input_fn in
         (if not no_gnuplot then
            Gnuplot.regr_plot title_str acts preds
         )
