@@ -525,20 +525,23 @@ let extract_norm_params_AP_lines num_features l =
   ) l;
   { global_min = !glob_min; global_max = !glob_max; min_max_ht = ht }
 
-let lines_of_file pairs2csv instance_wise_norm fn =
+type normalization = IWN (* instance-wise normalization *)
+                   | Scaled (* scaled to fall in [0:1] *)
+                   | None
+
+let lines_of_file pairs2csv normalize fn =
   let all_lines = LO.lines_of_file fn in
   if pairs2csv then
-    (if instance_wise_norm then
-       L.map instance_wise_norm_AP_line all_lines
-     else
-       L.map atom_pairs_line_to_csv all_lines
-    )
+    match normalize with
+    | Scaled -> failwith "not implemented yet"
+    | IWN -> L.map instance_wise_norm_AP_line all_lines
+    | None -> L.map atom_pairs_line_to_csv all_lines
   else
-    (if instance_wise_norm then
-       L.map normalize_line all_lines
-     else
-       all_lines
-    )
+    match normalize with
+    | Scaled -> failwith "Svmwrap.lines_of_file: \
+                          not --pairs and Scaled: unsupported"
+    | IWN -> L.map normalize_line all_lines
+    | None -> all_lines
 
 (* uncompress file if needed
    return (uncompressed_fn, was_compressed) *)
@@ -567,6 +570,7 @@ let main () =
               [-g <float>]: fix gamma (for RBF and Sig kernels)\n  \
               [-r <float>]: fix r for the Sig kernel\n  \
               [--iwn]: turn ON instance-wise-normalization\n  \
+              [--scale]: turn ON [0:1] scaling\n  \
               [--no-plot]: no gnuplot\n  \
               [{-n|--NxCV} <int>]: folds of cross validation\n  \
               [-q]: quiet\n  \
@@ -642,7 +646,13 @@ let main () =
   let d_range_str = CLI.get_string_opt ["--d-range"] args in
   let quiet = CLI.get_set_bool ["-q"] args in
   let verbose = (not quiet) || (CLI.get_set_bool ["-v";"--verbose"] args) in
-  let instance_wise_norm = CLI.get_set_bool ["--iwn"] args in
+  let normalize =
+    match (CLI.get_set_bool ["--iwn"] args,
+           CLI.get_set_bool ["--scale"] args) with
+    | true, false -> IWN
+    | false, true -> Scaled
+    | true, true -> failwith "Svmwrap: at most one of {--iwn|--scale}"
+    | false, false -> None in
   let maybe_epsilon = CLI.get_float_opt ["-e"] args in
   let maybe_esteps = CLI.get_int_opt ["--scan-e"] args in
   let no_gnuplot = CLI.get_set_bool ["--no-plot"] args in
@@ -725,7 +735,7 @@ let main () =
           (* randomize lines *)
           let all_lines =
             L.shuffle ~state:rng
-              (lines_of_file pairs instance_wise_norm input_fn) in
+              (lines_of_file pairs normalize input_fn) in
           let nb_lines = L.length all_lines in
           (* partition *)
           let train_card =
