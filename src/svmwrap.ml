@@ -610,42 +610,34 @@ let main () =
   let cs = match fixed_c with
     | Some c -> [c]
     | None ->
-      (* FBR: some refacto here *)
       if scan_C || BatOption.is_some c_range_str then
         decode_c_range c_range_str
-      else
-        (* default value from svm-train documentation *)
+      else (* default value from svm-train documentation *)
         [1.0] in
   (* gamma range is handled very similarly to C range *)
   let gs = match fixed_g with
     | Some g -> [g]
     | None ->
-      (* FBR: some refacto here *)
       if scan_g || BatOption.is_some g_range_str then
         decode_g_range g_range_str
-      else
-        (* default value from svm-train documentation *)
+      else (* default value from svm-train documentation *)
         let default_gamma = 1.0 /. (float num_features) in
         [default_gamma] in
   (* r range; only used by the sigmoid and polynomial kernels *)
   let rs = match fixed_r with
     | Some r -> [r]
     | None ->
-      (* FBR: some refacto here *)
       if BatOption.is_some r_range_str then
         decode_r_range r_range_str
-      else
-        (* default value from svm-train documentation *)
+      else (* default value from svm-train documentation *)
         [0.0] in
   (* d range; only used by the polynomial kernel *)
   let ds = match fixed_d with
     | Some d -> [d]
     | None ->
-      (* FBR: some refacto here *)
       if BatOption.is_some d_range_str then
         decode_d_range d_range_str
-      else
-        (* default value from svm-train documentation *)
+      else (* default value from svm-train documentation *)
         [3] in
   (* e-range? *)
   let maybe_es = decode_e_range e_range_str in
