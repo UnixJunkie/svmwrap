@@ -26,6 +26,13 @@ let robust_float_of_string s =
     (Log.fatal "Svmwrap.robust_float_of_string: could not parse: %s" s;
      raise exn)
 
+(* FBR: automate optim. for K=linear
+   (* e in [0:|fabs_max|]
+    * C in [2^-5:2^15] *)
+ * FBR: automate optim. for K=RBF
+    * same e and C ranges
+    * gamma in [2^-15:2^3] *)
+
 (* kernels we support *)
 type kernel = Linear
             | RBF of float (* gamma *)
@@ -259,6 +266,68 @@ let optimize_regr verbose ncores kernels es cs train test =
         (e, c, kernel, r2)
       ) ecks in
   best_r2 e_c_k_r2s
+
+(* variables to monitor NLopt optimization progress *)
+let nlopt_iter = ref 0
+let nlopt_best_r2 = ref 0.0
+
+let nlopt_reset_iter_and_r2 () =
+  nlopt_iter := 0;
+  nlopt_best_r2 := 0.0
+
+(* we don't have a gradient => _gradient *)
+let nlopt_eval_solution verbose train test params _gradient =
+  let e = params.(0) in
+  let c = params.(1) in
+  let act, preds =
+    single_train_test_regr verbose Discard Linear e c train test in
+  let curr_r2 = Cpm.RegrStats.r2 act preds in
+  nlopt_best_r2 := max !nlopt_best_r2 curr_r2; (* best R2 seen up to now *)
+  if verbose || !nlopt_iter mod 10 = 0 then
+    Log.info "%02d %f Lin(e=%g,C=%g)=%f"
+      !nlopt_iter !nlopt_best_r2 e c curr_r2
+  ;
+  incr nlopt_iter;
+  curr_r2
+
+(* let nlopt_optimize_regr verbose kernels e_range c_range train test =
+ *   match kernels with
+ *   | [Linear as kernel] ->
+ *     (\* let act, preds =
+ *      *   single_train_test_regr verbose Discard kernel e c train test in
+ *      * let r2 = Cpm.RegrStats.r2 act preds in
+ *      * log_R2 e c kernel r2;
+ *      * (e, c, kernel, r2) *\)
+ *     Nlopt.(
+ *       (\* local optimizer that will be passed to the global one *\)
+ *       let local = create sbplx 1 in (\* local, gradient-free *\)
+ *       set_max_objective local
+ *         (eval_solution_indexed ncores kernel indexed_mols);
+ *       (\* I don't set parameter bounds on the local optimizer, I guess
+ *        * the global optimizer handles this *\)
+ *       (\* hard/stupid stop conditions *\)
+ *       set_stopval local 1.0; (\* max AUC *\)
+ *       (\* smart stop conditions *\)
+ *       set_ftol_abs local 0.0001;
+ *       (\* I also do not provide an initial guess for the local optimizer *\)
+ *       (\* global optimizer that will use the local one *\)
+ *       let global = create auglag 1 in (\* global *\)
+ *       set_local_optimizer global local;
+ *       set_max_objective global
+ *         (eval_solution_indexed ncores kernel indexed_mols);
+ *       (\* bandwidth is in [0..1] *\)
+ *       set_lower_bounds global [| 0.01 |];
+ *       set_upper_bounds global [| 1.0 |];
+ *       (\* hard/stupid stop conditions *\)
+ *       set_stopval global 1.0; (\* max AUC *\)
+ *       set_maxeval global max_evals; (\* max number of AUC calls *\)
+ *       let initial_guess = [| 0.5 |] in
+ *       let stop_cond, params, val_auc = optimize global initial_guess in
+ *       Log.info "optimize_global_bandwidth: %s" (string_of_result stop_cond);
+ *       let kb = params.(0) in
+ *       (kb, val_auc)
+ *     )
+ *   | _ -> failwith "not implemented yet" *)
 
 (* like optimize_regr, but using NxCV *)
 let optimize_regr_nfolds ncores verbose nfolds kernels es cs train =
