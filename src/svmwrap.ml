@@ -293,8 +293,9 @@ let nlopt_eval_solution verbose train test params _gradient =
 let nlopt_optimize_regr verbose max_evals kernels (e_min, e_max) (c_min, c_max) train test =
   match kernels with
   | [Linear] ->
+    let ndims = 2 in (* !!! JUST FOR THE LINEAR KERNEL !!! *)
     (* local optimizer that will be passed to the global one *)
-    let local = Nlopt.(create sbplx 1) in (* local, gradient-free *)
+    let local = Nlopt.(create sbplx ndims) in (* local optimizer: gradient-free *)
     Nlopt.set_max_objective local
       (nlopt_eval_solution verbose train test);
     (* I don't set parameter bounds on the local optimizer, I guess
@@ -303,8 +304,7 @@ let nlopt_optimize_regr verbose max_evals kernels (e_min, e_max) (c_min, c_max) 
     Nlopt.set_stopval local 1.0; (* max R2 *)
     (* smart stop conditions *)
     Nlopt.set_ftol_abs local 0.0001; (* FBR: might need to be tweaked *)
-    (* I assume this integer is |dimensions| *)
-    let global = Nlopt.(create auglag 2) in (* global *)
+    let global = Nlopt.(create auglag ndims) in (* global optimizer *)
     Nlopt.set_local_optimizer global local;
     Nlopt.set_max_objective global
       (nlopt_eval_solution verbose train test);
@@ -668,6 +668,7 @@ let main () =
               [-c <float>]: fix C\n  \
               [-e <float>]: epsilon in the loss function of epsilon-SVR;\n  \
               (0 <= epsilon <= max_i(|y_i|))\n  \
+              [--nlopt]: use NLopt global optimizer instead of grid-search\n  \
               [-g <float>]: fix gamma (for RBF and Sig kernels)\n  \
               [-r <float>]: fix r for the Sig kernel\n  \
               [--iwn]: turn ON instance-wise-normalization\n  \
@@ -747,6 +748,7 @@ let main () =
   let r_range_str = CLI.get_string_opt ["--r-range"] args in
   let d_range_str = CLI.get_string_opt ["--d-range"] args in
   let quiet = CLI.get_set_bool ["-q"] args in
+  let nlopt_optimization = CLI.get_set_bool ["--nlopt"] args in
   let verbose = (not quiet) || (CLI.get_set_bool ["-v";"--verbose"] args) in
   let normalize =
     match (CLI.get_set_bool ["--iwn"] args,
@@ -844,13 +846,22 @@ let main () =
             BatFloat.round_to_int (train_p *. (float nb_lines)) in
           let train, test = L.takedrop train_card all_lines in
           let best_e, best_c, best_K, best_r2 =
-            let epsilons =
-              epsilon_range maybe_epsilon maybe_esteps maybe_es train in
-            if nfolds <= 1 then
-              optimize_regr verbose ncores kernels epsilons cs train test
+            if nlopt_optimization then
+              let dep_vars = L.map (get_pIC50 false) all_lines in
+              let e_bounds = epsilon_bounds dep_vars in
+              let c_bounds = (2.0 ** -.5.0, 2.0 ** 15.0) in
+              (* FBR: currently; we only support the linear kernel in this mode *)
+              (* FBR: max_iter has a default of 100; but the user can say otherwise on the CLI *)
+              let e', c', r2' = nlopt_optimize_regr verbose 100 [Linear] e_bounds c_bounds train test in
+              (e', c', Linear, r2')
             else
-              optimize_regr_nfolds
-                ncores verbose nfolds kernels epsilons cs all_lines in
+              let epsilons =
+                epsilon_range maybe_epsilon maybe_esteps maybe_es train in
+              if nfolds <= 1 then
+                optimize_regr verbose ncores kernels epsilons cs train test
+              else
+                optimize_regr_nfolds
+                  ncores verbose nfolds kernels epsilons cs all_lines in
           let actual, preds =
             if nfolds <= 1 then
               single_train_test_regr
