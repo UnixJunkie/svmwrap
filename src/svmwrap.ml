@@ -69,6 +69,17 @@ type model_command = Restore_from of Utls.filename
 
 let epsilon_SVR = 3 (* cf. svm-train manpage *)
 
+(* (0 <= epsilon <= max_i(|y_i|)); according to:
+   "Parameter Selection for Linear Support Vector Regression."
+   Jui-Yang Hsia and Chih-Jen Lin.
+   February 2020. IEEE Transactions on Neural Networks and Learning Systems.
+   DOI: 10.1109/TNNLS.2020.2967637
+   This value is passed via -p to svm-train *)
+let epsilon_bounds (ys: float list): float * float =
+  let maxi = L.max (L.rev_map (abs_float) ys) in
+  Log.info "SVR epsilon range: [0:%g]" maxi;
+  (0.0, maxi)
+
 (* constants to specify kernel for svm-train *)
 let int_of_kernel = function
   | Linear -> 0
