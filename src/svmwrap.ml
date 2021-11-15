@@ -290,44 +290,38 @@ let nlopt_eval_solution verbose train test params _gradient =
   incr nlopt_iter;
   curr_r2
 
-(* let nlopt_optimize_regr verbose kernels e_range c_range train test =
- *   match kernels with
- *   | [Linear as kernel] ->
- *     (\* let act, preds =
- *      *   single_train_test_regr verbose Discard kernel e c train test in
- *      * let r2 = Cpm.RegrStats.r2 act preds in
- *      * log_R2 e c kernel r2;
- *      * (e, c, kernel, r2) *\)
- *     Nlopt.(
- *       (\* local optimizer that will be passed to the global one *\)
- *       let local = create sbplx 1 in (\* local, gradient-free *\)
- *       set_max_objective local
- *         (eval_solution_indexed ncores kernel indexed_mols);
- *       (\* I don't set parameter bounds on the local optimizer, I guess
- *        * the global optimizer handles this *\)
- *       (\* hard/stupid stop conditions *\)
- *       set_stopval local 1.0; (\* max AUC *\)
- *       (\* smart stop conditions *\)
- *       set_ftol_abs local 0.0001;
- *       (\* I also do not provide an initial guess for the local optimizer *\)
- *       (\* global optimizer that will use the local one *\)
- *       let global = create auglag 1 in (\* global *\)
- *       set_local_optimizer global local;
- *       set_max_objective global
- *         (eval_solution_indexed ncores kernel indexed_mols);
- *       (\* bandwidth is in [0..1] *\)
- *       set_lower_bounds global [| 0.01 |];
- *       set_upper_bounds global [| 1.0 |];
- *       (\* hard/stupid stop conditions *\)
- *       set_stopval global 1.0; (\* max AUC *\)
- *       set_maxeval global max_evals; (\* max number of AUC calls *\)
- *       let initial_guess = [| 0.5 |] in
- *       let stop_cond, params, val_auc = optimize global initial_guess in
- *       Log.info "optimize_global_bandwidth: %s" (string_of_result stop_cond);
- *       let kb = params.(0) in
- *       (kb, val_auc)
- *     )
- *   | _ -> failwith "not implemented yet" *)
+let nlopt_optimize_regr verbose max_evals kernels (e_min, e_max) (c_min, c_max) train test =
+  match kernels with
+  | [Linear] ->
+    (* local optimizer that will be passed to the global one *)
+    let local = Nlopt.(create sbplx 1) in (* local, gradient-free *)
+    Nlopt.set_max_objective local
+      (nlopt_eval_solution verbose train test);
+    (* I don't set parameter bounds on the local optimizer, I guess
+     * the global optimizer handles this *)
+    (* hard/stupid stop conditions *)
+    Nlopt.set_stopval local 1.0; (* max R2 *)
+    (* smart stop conditions *)
+    Nlopt.set_ftol_abs local 0.0001; (* FBR: might need to be tweaked *)
+    (* I assume this integer is |dimensions| *)
+    let global = Nlopt.(create auglag 2) in (* global *)
+    Nlopt.set_local_optimizer global local;
+    Nlopt.set_max_objective global
+      (nlopt_eval_solution verbose train test);
+    (* bounds for e and C *)
+    Nlopt.set_lower_bounds global [|e_min; c_min|];
+    Nlopt.set_upper_bounds global [|e_max; c_max|];
+    (* hard/stupid stop conditions *)
+    Nlopt.set_stopval global 1.0; (* max R2 *)
+    (* max number of single_train_test_regr calls *)
+    Nlopt.set_maxeval global max_evals;
+    (* not so stupid starting solution *)
+    let initial_guess = [|0.0; 1.0|] in
+    let stop_cond, params, r2 = Nlopt.optimize global initial_guess in
+    Log.info "NLopt optimize global: %s" (Nlopt.string_of_result stop_cond);
+    let e, c = params.(0), params.(1) in
+    (e, c, r2)
+  | _ -> failwith "not implemented yet"
 
 (* like optimize_regr, but using NxCV *)
 let optimize_regr_nfolds ncores verbose nfolds kernels es cs train =
