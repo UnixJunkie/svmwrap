@@ -269,7 +269,7 @@ let nlopt_reset_iter_and_r2 () =
   nlopt_iter := 0;
   nlopt_best_r2 := 0.0
 
-(* we don't have a gradient => _gradient *)
+(* we don't have a gradient --> _gradient *)
 let nlopt_eval_solution verbose train test params _gradient =
   match A.length params with
   | 2 ->
@@ -711,7 +711,8 @@ let main () =
               [-c <float>]: fix C\n  \
               [-e <float>]: epsilon in the loss function of epsilon-SVR;\n  \
               (0 <= epsilon <= max_i(|y_i|))\n  \
-              [--nlopt]: use NLopt global optimizer instead of grid-search\n  \
+              [--nlopt <int>]: use NLopt with MAX_ITER (global optim.)\n  \
+              instead of grid-search (recommended: MAX_ITER >= 100)\n  \
               [-g <float>]: fix gamma (for RBF and Sig kernels)\n  \
               [-r <float>]: fix r for the Sig kernel\n  \
               [--iwn]: turn ON instance-wise-normalization\n  \
@@ -791,7 +792,7 @@ let main () =
   let r_range_str = CLI.get_string_opt ["--r-range"] args in
   let d_range_str = CLI.get_string_opt ["--d-range"] args in
   let quiet = CLI.get_set_bool ["-q"] args in
-  let nlopt_optimization = CLI.get_set_bool ["--nlopt"] args in
+  let maybe_nlopt = CLI.get_int_opt ["--nlopt"] args in
   let verbose = (not quiet) || (CLI.get_set_bool ["-v";"--verbose"] args) in
   let normalize =
     match (CLI.get_set_bool ["--iwn"] args,
@@ -890,7 +891,8 @@ let main () =
             BatFloat.round_to_int (train_p *. (float nb_lines)) in
           let train, test = L.takedrop train_card all_lines in
           let best_e, best_c, best_K, best_r2 =
-            if nlopt_optimization then
+            match maybe_nlopt with
+            | Some max_iter ->
               let e_bounds =
                 let dep_vars = L.map (get_pIC50 false) all_lines in
                 let mini, maxi = epsilon_bounds dep_vars in
@@ -901,12 +903,11 @@ let main () =
                * for those ranges *)
               let c_bounds = (2.0 ** -.5.0, 1.0, 2.0 ** 15.0) in
               let g_bounds = (2.0 ** -.15.0, default_gamma, 2.0 ** 3.0) in
-              (* FBR: max_iter has a default of 100; but the user can say otherwise on the CLI *)
               let e', c', k', r2' =
                 nlopt_optimize_regr
-                  verbose 100 (L.hd kernels) e_bounds c_bounds g_bounds train test in
+                  verbose max_iter (L.hd kernels) e_bounds c_bounds g_bounds train test in
               (e', c', k', r2')
-            else
+            | None ->
               let epsilons =
                 epsilon_range maybe_epsilon maybe_esteps maybe_es train in
               if nfolds <= 1 then
