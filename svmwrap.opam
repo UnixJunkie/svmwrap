@@ -17,7 +17,6 @@ depends: [
   "molenc" {>= "16.0.0"}
   "parany" {>= "11.0.0"}
   "line_oriented" {>= "1.2.0"}
-  "nlopt-ocaml" {>= "0.5.1"}
 ]
 # the software can compile and install without the depopts.
 # however, some tools and options will not work anymore at run-time

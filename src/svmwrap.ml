@@ -261,111 +261,6 @@ let optimize_regr verbose ncores kernels es cs train test =
       ) ecks in
   best_r2 e_c_k_r2s
 
-(* variables to monitor NLopt optimization progress *)
-let nlopt_iter = ref 0
-let nlopt_best_r2 = ref 0.0
-
-let nlopt_reset_iter_and_r2 () =
-  nlopt_iter := 0;
-  nlopt_best_r2 := 0.0
-
-(* we don't have a gradient --> _gradient *)
-let nlopt_eval_solution verbose train test params _gradient =
-  match A.length params with
-  | 2 ->
-    let e = params.(0) in
-    let c = params.(1) in
-    let act, preds =
-      single_train_test_regr verbose Discard Linear e c train test in
-    let curr_r2 = Cpm.RegrStats.r2 act preds in
-    nlopt_best_r2 := max !nlopt_best_r2 curr_r2; (* best R2 seen up to now *)
-    (if verbose || !nlopt_iter mod 10 = 0 then
-       Log.info "%04d %.3f Lin(e=%g,C=%g)=%.3f"
-         !nlopt_iter !nlopt_best_r2 e c curr_r2
-    );
-    incr nlopt_iter;
-    curr_r2
-  | 3 ->
-    let e = params.(0) in
-    let c = params.(1) in
-    let g = params.(2) in
-    let act, preds =
-      single_train_test_regr verbose Discard (RBF g) e c train test in
-    let curr_r2 = Cpm.RegrStats.r2 act preds in
-    nlopt_best_r2 := max !nlopt_best_r2 curr_r2; (* best R2 seen up to now *)
-    (if verbose || !nlopt_iter mod 10 = 0 then
-       Log.info "%04d %.3f RBF(e=%g,C=%g,g=%g)=%.3f"
-         !nlopt_iter !nlopt_best_r2 e c g curr_r2
-    );
-    incr nlopt_iter;
-    curr_r2
-  | _ -> failwith "Svmwrap.nlopt_eval_solution: only Linear or RBF kernel"
-
-let nlopt_optimize_regr verbose max_evals kernel
-    (e_min, e_def, e_max)
-    (c_min, c_def, c_max)
-    (g_min, g_def, g_max) train test =
-  match kernel with
-  | Linear ->
-    let ndims = 2 in (* for the linear kernel: e and C *)
-    (* local optimizer that will be passed to the global one *)
-    let local = Nlopt.(create sbplx ndims) in (* local optimizer: gradient-free *)
-    Nlopt.set_max_objective local
-      (nlopt_eval_solution verbose train test);
-    (* I don't set parameter bounds on the local optimizer, I guess
-     * the global optimizer handles this *)
-    (* hard/stupid stop conditions *)
-    Nlopt.set_stopval local 1.0; (* max R2 *)
-    (* smart stop conditions *)
-    Nlopt.set_ftol_abs local 0.0001; (* FBR: might need to be tweaked *)
-    let global = Nlopt.(create auglag ndims) in (* global optimizer *)
-    Nlopt.set_local_optimizer global local;
-    Nlopt.set_max_objective global
-      (nlopt_eval_solution verbose train test);
-    (* bounds for e and C *)
-    Nlopt.set_lower_bounds global [|e_min; c_min|];
-    Nlopt.set_upper_bounds global [|e_max; c_max|];
-    (* hard/stupid stop conditions *)
-    Nlopt.set_stopval global 1.0; (* max R2 *)
-    (* max number of single_train_test_regr calls *)
-    Nlopt.set_maxeval global max_evals;
-    (* not so stupid starting solution *)
-    let initial_guess = [|0.0; 1.0|] in
-    let stop_cond, params, r2 = Nlopt.optimize global initial_guess in
-    Log.info "NLopt optimize global: %s" (Nlopt.string_of_result stop_cond);
-    let e, c = params.(0), params.(1) in
-    (e, c, Linear, r2)
-  | RBF _ ->
-    let ndims = 3 in (* for the RBF kernel: (e, C, g) *)
-    (* local optimizer that will be passed to the global one *)
-    let local = Nlopt.(create sbplx ndims) in (* local optimizer: gradient-free *)
-    Nlopt.set_max_objective local
-      (nlopt_eval_solution verbose train test);
-    (* I don't set parameter bounds on the local optimizer, I guess
-     * the global optimizer handles this *)
-    (* hard/stupid stop conditions *)
-    Nlopt.set_stopval local 1.0; (* max R2 *)
-    (* smart stop conditions *)
-    Nlopt.set_ftol_abs local 0.0001; (* FBR: might need to be tweaked *)
-    let global = Nlopt.(create auglag ndims) in (* global optimizer *)
-    Nlopt.set_local_optimizer global local;
-    Nlopt.set_max_objective global
-      (nlopt_eval_solution verbose train test);
-    (* bounds for e and C *)
-    Nlopt.set_lower_bounds global [|e_min; c_min; g_min|];
-    Nlopt.set_upper_bounds global [|e_max; c_max; g_max|];
-    (* hard/stupid stop conditions *)
-    Nlopt.set_stopval global 1.0; (* max R2 *)
-    (* max number of single_train_test_regr calls *)
-    Nlopt.set_maxeval global max_evals;
-    (* not so stupid starting solution *)
-    let initial_guess = [|e_def; c_def; g_def|] in
-    let stop_cond, params, r2 = Nlopt.optimize global initial_guess in
-    Log.info "NLopt optimize global: %s" (Nlopt.string_of_result stop_cond);
-    let e, c, g = params.(0), params.(1), params.(2) in
-    (e, c, RBF g, r2)
-  | _ -> failwith "Svmwrap.nlopt_optimize_regr: only Linear or RBF kernel"
-
 (* like optimize_regr, but using NxCV *)
 let optimize_regr_nfolds ncores verbose nfolds kernels es cs train =
   let train_tests = Cpm.Utls.cv_folds nfolds train in
@@ -711,8 +606,6 @@ let main () =
               [-c <float>]: fix C\n  \
               [-e <float>]: epsilon in the loss function of epsilon-SVR;\n  \
               (0 <= epsilon <= max_i(|y_i|))\n  \
-              [--nlopt <int>]: use NLopt with MAX_ITER (global optim.)\n  \
-              instead of grid-search (recommended: MAX_ITER >= 100)\n  \
               [-g <float>]: fix gamma (for RBF and Sig kernels)\n  \
               [-r <float>]: fix r for the Sig kernel\n  \
               [--iwn]: turn ON instance-wise-normalization\n  \
@@ -792,7 +685,6 @@ let main () =
   let r_range_str = CLI.get_string_opt ["--r-range"] args in
   let d_range_str = CLI.get_string_opt ["--d-range"] args in
   let quiet = CLI.get_set_bool ["-q"] args in
-  let maybe_nlopt = CLI.get_int_opt ["--nlopt"] args in
   let verbose = (not quiet) || (CLI.get_set_bool ["-v";"--verbose"] args) in
   let normalize =
     match (CLI.get_set_bool ["--iwn"] args,
@@ -891,30 +783,13 @@ let main () =
             BatFloat.round_to_int (train_p *. (float nb_lines)) in
           let train, test = L.takedrop train_card all_lines in
           let best_e, best_c, best_K, best_r2 =
-            match maybe_nlopt with
-            | Some max_iter ->
-              let e_bounds =
-                let dep_vars = L.map (get_pIC50 false) all_lines in
-                let mini, maxi = epsilon_bounds dep_vars in
-                let default = 0.1 in
-                (mini, default, maxi) in
-              (* cf. "A Practical Guide to Support Vector Classification"
-               * Chih-Wei Hsu, Chih-Chung Chang, and Chih-Jen Lin; May 19, 2016
-               * for those ranges *)
-              let c_bounds = (2.0 ** -.5.0, 1.0, 2.0 ** 15.0) in
-              let g_bounds = (2.0 ** -.15.0, default_gamma, 2.0 ** 3.0) in
-              let e', c', k', r2' =
-                nlopt_optimize_regr
-                  verbose max_iter (L.hd kernels) e_bounds c_bounds g_bounds train test in
-              (e', c', k', r2')
-            | None ->
-              let epsilons =
-                epsilon_range maybe_epsilon maybe_esteps maybe_es train in
-              if nfolds <= 1 then
-                optimize_regr verbose ncores kernels epsilons cs train test
-              else
-                optimize_regr_nfolds
-                  ncores verbose nfolds kernels epsilons cs all_lines in
+            let epsilons =
+              epsilon_range maybe_epsilon maybe_esteps maybe_es train in
+            if nfolds <= 1 then
+              optimize_regr verbose ncores kernels epsilons cs train test
+            else
+              optimize_regr_nfolds
+                ncores verbose nfolds kernels epsilons cs all_lines in
           let actual, preds =
             if nfolds <= 1 then
               single_train_test_regr
