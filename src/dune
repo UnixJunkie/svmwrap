@@ -1,6 +1,6 @@
 
 (executables
   (names        svmwrap)
-  (public_names svmwrap)
+  (public_names svmwrap_nonlopt)
   (libraries batteries cpm dolog minicli parany molenc line_oriented)
   (modules utls svmwrap gnuplot))
