@@ -31,6 +31,7 @@ module SL = struct
 end
 
 module ROC = Cpm.MakeROC.Make(SL)
+module Perfs = Perf.Make(SL)
 
 (* float_of_string doesn't parse the scientific notation ! *)
 let robust_float_of_string s =
@@ -314,6 +315,110 @@ let optimize_regr verbose ncores kernels es cs train test =
         (e, c, kernel, r2)
       ) ecks in
   best_r2 e_c_k_r2s
+
+let accumulate_scores x y = match (x, y) with
+  | ([], sl2) -> sl2
+  | (sl1, []) -> sl1
+  | (sl1, sl2) ->
+    L.map2 (fun (l1, s1) (l2, s2) ->
+        assert(l1 = l2);
+        (l1, s1 +. s2)
+      ) sl1 sl2
+  
+let average_scores k sls =
+  assert(L.length sls = k);
+  let sum = L.fold_left accumulate_scores [] sls in
+  L.map (fun (l, s) -> (l, s /. (float k))) sum
+
+let balanced_bag pairs rng lines =
+  let acts, decs = L.partition (is_active pairs) lines in
+  let n =
+    let n_acts = L.length acts in
+    let n_decs = L.length decs in
+    min n_acts n_decs in
+  let acts_a = Utls.array_bootstrap_sample rng n (A.of_list acts) in
+  let decs_a = Utls.array_bootstrap_sample rng n (A.of_list decs) in
+  let tmp_a = A.concat [acts_a; decs_a] in
+  A.shuffle ~state:rng tmp_a; (* randomize selected lines order *)
+  A.to_list tmp_a
+
+let train_test ncores verbose pairs cmd rng c w k train test =
+  if k <= 1 then
+    (* we don't use bagging then *)
+    single_train_test verbose pairs cmd c w train test
+  else (* k > 1 *)
+    let bags = L.init k (fun _ -> balanced_bag pairs rng train) in
+    let k_score_labels =
+      Parany.Parmap.parmap ncores (fun bag ->
+          single_train_test verbose pairs cmd c w bag test
+        ) bags in
+    average_scores k k_score_labels
+
+let nfolds_train_test ncores verbose pairs cmd rng c w k n dataset =
+  assert(n > 1);
+  L.flatten
+    (L.map (fun (train, test) ->
+         train_test ncores verbose pairs cmd rng c w k train test
+       ) (Cpm.Utls.cv_folds n dataset))
+    
+let train_test_maybe_nfolds
+      ncores nfolds verbose model_cmd rng c' w' k' train test =
+  if nfolds <= 1 then
+    train_test ncores verbose false model_cmd rng c' w' k' train test
+  else (* nfolds > 1 *)
+    nfolds_train_test ncores verbose false model_cmd rng c' w' k' nfolds
+      (L.rev_append train test)
+  
+let perf_plot noplot score_labels c' w' k' auc bed =
+  let title_str =
+    sprintf "C=%g w=%g k=%d AUC=%.3f BED=%.3f"
+      c' w' k' auc bed in
+  if not noplot then
+    let tmp_scores_fn =
+      Fn.temp_file ~temp_dir:"/tmp" "linwrap_optimize_" ".txt" in
+    Perfs.evaluate_performance
+      None None tmp_scores_fn title_str score_labels;
+    Sys.remove tmp_scores_fn
+
+(* return the best parameter configuration found in the parameter
+   configs list [cwks]: (best_c, best_w, best_k, best_auc) *)
+let optimize ncores verbose noplot nfolds model_cmd rng train test cwks =
+  match cwks with
+  | [] -> assert(false) (* there should be at least one configuration *)
+  | [((c', w'), k')] ->
+     let for_auc =
+       let score_labels =
+         train_test_maybe_nfolds
+           ncores nfolds verbose model_cmd rng c' w' k' train test in
+       A.of_list score_labels in
+     ROC.rank_order_by_score_a for_auc;
+     let auc = ROC.fast_auc_a for_auc in
+     let bed = ROC.fast_bedroc_auc_a for_auc in
+     perf_plot noplot for_auc c' w' k' auc bed;
+     (c', w', k', auc)
+  | _ ->
+     Parany.Parmap.parfold ncores
+       (fun ((c', w'), k') ->
+         let for_auc =
+           let score_labels =
+             train_test_maybe_nfolds
+               1 nfolds verbose model_cmd rng c' w' k' train test in
+           A.of_list score_labels in
+         ROC.rank_order_by_score_a for_auc;
+         let auc = ROC.fast_auc_a for_auc in
+         let bed = ROC.fast_bedroc_auc_a for_auc in
+         perf_plot noplot for_auc c' w' k' auc bed;
+         (c', w', k', auc))
+       (fun
+          ((_c, _w, _k, prev_best_auc) as prev)
+          ((c', w', k', curr_auc) as curr) ->
+         if curr_auc > prev_best_auc then
+           (Log.info "c: %g w1: %g k: %d AUC: %.3f" c' w' k' curr_auc;
+            curr)
+         else
+           (Log.warn "c: %g w1: %g k: %d AUC: %.3f" c' w' k' curr_auc;
+            prev)
+       ) (-1.0, -1.0, -1, 0.5) cwks
 
 (* variables to monitor NLopt optimization progress *)
 let nlopt_iter = ref 0
