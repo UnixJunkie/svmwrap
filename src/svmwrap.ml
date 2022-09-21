@@ -285,21 +285,6 @@ let pairs_to_csv verbose pairs_fn =
   LO.lines_to_file tmp_csv_fn (LO.map pairs_fn atom_pairs_line_to_csv);
   tmp_csv_fn
 
-(* create folds of cross validation; each fold consists in (train, test) *)
-let cv_folds n l =
-  let test_sets = Cpm.Utls.list_nparts n l in
-  assert(n = L.length test_sets);
-  let rec loop acc prev curr =
-    match curr with
-    | [] -> acc
-    | x :: xs ->
-      let before_after = L.flatten (L.rev_append prev xs) in
-      let prev' = x :: prev in
-      let train_test = (before_after, x) in
-      let acc' = train_test :: acc in
-      loop acc' prev' xs in
-  loop [] [] test_sets
-
 (* find best (e, C) configuration by R2 maximization *)
 let best_r2 l =
   L.fold_left (fun
