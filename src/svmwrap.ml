@@ -202,17 +202,17 @@ let single_train_test_regr verbose cmd kernel e c train test =
     (sprintf "Svmwrap.single_train_test_regr: |preds|=%d <> |test|=%d"
        nb_preds test_card);
   begin match cmd with
-    | Restore_from _ -> assert(false) (* not dealt with here *)
-    | Discard ->
-      (if not verbose then
-         L.iter (Sys.remove) [train_fn; test_fn; preds_fn; model_fn])
-    | Save_into out_fn ->
-      begin
-        Sys.rename model_fn out_fn;
-        Log.info "model saved to: %s" out_fn;
-        (if not verbose then
-           L.iter (Sys.remove) [train_fn; test_fn; preds_fn])
-      end
+  | Restore_from _ -> assert(false) (* not dealt with here *)
+  | Discard ->
+     (if not verbose then
+        L.iter (Sys.remove) [train_fn; test_fn; preds_fn; model_fn])
+  | Save_into out_fn ->
+     begin
+       Sys.rename model_fn out_fn;
+       Log.info "model saved to: %s" out_fn;
+       (if not verbose then
+          L.iter (Sys.remove) [train_fn; test_fn; preds_fn])
+     end
   end;
   let pred_values = L.map robust_float_of_string pred_lines in
   (actual_values, pred_values)
@@ -225,7 +225,7 @@ let increment_feat_indexes features =
   L.iter (fun feat_val ->
       try Scanf.sscanf feat_val "%d:%d"
             (fun feat value ->
-               bprintf buff " %d:%d" (feat + 1) value
+              bprintf buff " %d:%d" (feat + 1) value
             )
       with exn ->
         (Log.fatal "Svmwrap.increment_feat_indexes: cannot parse '%s' in '%s'"
@@ -245,21 +245,21 @@ let liblinear_line_to_FpMol index l =
   match feat_vals with
   | [] | [_] -> failwith ("Svmwrap.liblinear_line_to_FpMol: " ^ l)
   | ic50 :: feat_vals ->
-    let name = sprintf "mol%d" index in
-    let buff = Buffer.create 1024 in
-    L.iteri (fun i feat_val ->
-        try Scanf.sscanf feat_val "%d:%d"
-              (fun feat value ->
+     let name = sprintf "mol%d" index in
+     let buff = Buffer.create 1024 in
+     L.iteri (fun i feat_val ->
+         try Scanf.sscanf feat_val "%d:%d"
+               (fun feat value ->
                  bprintf buff (if i = 0 then "[%d:%d" else ";%d:%d")
                    (feat - 1) value)
-        with exn ->
-          (Log.fatal "Svmwrap.liblinear_line_to_FpMol: cannot parse: %s"
-             feat_val;
-           raise exn)
-      ) feat_vals;
-    Buffer.add_char buff ']';
-    FpMol.create name index (robust_float_of_string ic50)
-      (Buffer.contents buff)
+         with exn ->
+           (Log.fatal "Svmwrap.liblinear_line_to_FpMol: cannot parse: %s"
+              feat_val;
+            raise exn)
+       ) feat_vals;
+     Buffer.add_char buff ']';
+     FpMol.create name index (robust_float_of_string ic50)
+       (Buffer.contents buff)
 
 let atom_pairs_line_to_csv line =
   (* Example for classification:
@@ -267,12 +267,12 @@ let atom_pairs_line_to_csv line =
    * "<NAME>,pIC50,[feat:val;...]" -> "-1 feat:val ..." *)
   match S.split_on_char ',' line with
   | [_name; pIC50; features] ->
-    assert(S.left features 1 = "[" && S.right features 1 = "]");
-    let semi_colon_to_space = function | ';' -> " "
-                                       | x -> (S.of_char x) in
-    let features' =
-      S.replace_chars semi_colon_to_space (S.chop ~l:1 ~r:1 features) in
-    sprintf "%s%s" pIC50 (increment_feat_indexes features')
+     assert(S.left features 1 = "[" && S.right features 1 = "]");
+     let semi_colon_to_space = function | ';' -> " "
+                                        | x -> (S.of_char x) in
+     let features' =
+       S.replace_chars semi_colon_to_space (S.chop ~l:1 ~r:1 features) in
+     sprintf "%s%s" pIC50 (increment_feat_indexes features')
   | _ -> failwith ("Svmwrap.atom_pairs_line_to_csv: cannot parse: " ^ line)
 
 (* unit tests for atom_pairs_line_to_csv *)
@@ -290,13 +290,13 @@ let pairs_to_csv verbose pairs_fn =
 (* find best (e, C) configuration by R2 maximization *)
 let best_r2 l =
   L.fold_left (fun
-                ((_best_e, _best_c, _best_K, best_r2) as best)
-                ((_curr_e, _curr_c, _best_K, curr_r2) as new_best) ->
-                if best_r2 >= curr_r2 then
-                  best
-                else
-                  new_best
-              ) (0.0, 0.0, Linear, 0.0) l
+        ((_best_e, _best_c, _best_K, best_r2) as best)
+        ((_curr_e, _curr_c, _best_K, curr_r2) as new_best) ->
+      if best_r2 >= curr_r2 then
+        best
+      else
+        new_best
+    ) (0.0, 0.0, Linear, 0.0) l
 
 let log_R2 e c kernel r2 =
   (if r2 < 0.3 then Log.error
@@ -321,11 +321,11 @@ let accumulate_scores x y = match (x, y) with
   | ([], sl2) -> sl2
   | (sl1, []) -> sl1
   | (sl1, sl2) ->
-    L.map2 (fun (l1, s1) (l2, s2) ->
-        assert(l1 = l2);
-        (l1, s1 +. s2)
-      ) sl1 sl2
-  
+     L.map2 (fun (l1, s1) (l2, s2) ->
+         assert(l1 = l2);
+         (l1, s1 +. s2)
+       ) sl1 sl2
+    
 let average_scores k sls =
   assert(L.length sls = k);
   let sum = L.fold_left accumulate_scores [] sls in
@@ -361,7 +361,7 @@ let nfolds_train_test ncores verbose pairs cmd rng c w k n dataset =
     (L.map (fun (train, test) ->
          train_test ncores verbose pairs cmd rng c w k train test
        ) (Cpm.Utls.cv_folds n dataset))
-    
+  
 let train_test_maybe_nfolds
       ncores nfolds verbose model_cmd rng c' w' k' train test =
   if nfolds <= 1 then
@@ -433,97 +433,97 @@ let nlopt_reset_iter_and_r2 () =
 let nlopt_eval_solution verbose train test params _gradient =
   match A.length params with
   | 2 ->
-    let e = params.(0) in
-    let c = params.(1) in
-    let act, preds =
-      single_train_test_regr verbose Discard Linear e c train test in
-    let curr_r2 = Cpm.RegrStats.r2 act preds in
-    nlopt_best_r2 := max !nlopt_best_r2 curr_r2; (* best R2 seen up to now *)
-    (if verbose || !nlopt_iter mod 10 = 0 then
-       Log.info "%04d %.3f Lin(e=%g,C=%g)=%.3f"
-         !nlopt_iter !nlopt_best_r2 e c curr_r2
-    );
-    incr nlopt_iter;
-    curr_r2
+     let e = params.(0) in
+     let c = params.(1) in
+     let act, preds =
+       single_train_test_regr verbose Discard Linear e c train test in
+     let curr_r2 = Cpm.RegrStats.r2 act preds in
+     nlopt_best_r2 := max !nlopt_best_r2 curr_r2; (* best R2 seen up to now *)
+     (if verbose || !nlopt_iter mod 10 = 0 then
+        Log.info "%04d %.3f Lin(e=%g,C=%g)=%.3f"
+          !nlopt_iter !nlopt_best_r2 e c curr_r2
+     );
+     incr nlopt_iter;
+     curr_r2
   | 3 ->
-    let e = params.(0) in
-    let c = params.(1) in
-    let g = params.(2) in
-    let act, preds =
-      single_train_test_regr verbose Discard (RBF g) e c train test in
-    let curr_r2 = Cpm.RegrStats.r2 act preds in
-    nlopt_best_r2 := max !nlopt_best_r2 curr_r2; (* best R2 seen up to now *)
-    (if verbose || !nlopt_iter mod 10 = 0 then
-       Log.info "%04d %.3f RBF(e=%g,C=%g,g=%g)=%.3f"
-         !nlopt_iter !nlopt_best_r2 e c g curr_r2
-    );
-    incr nlopt_iter;
-    curr_r2
+     let e = params.(0) in
+     let c = params.(1) in
+     let g = params.(2) in
+     let act, preds =
+       single_train_test_regr verbose Discard (RBF g) e c train test in
+     let curr_r2 = Cpm.RegrStats.r2 act preds in
+     nlopt_best_r2 := max !nlopt_best_r2 curr_r2; (* best R2 seen up to now *)
+     (if verbose || !nlopt_iter mod 10 = 0 then
+        Log.info "%04d %.3f RBF(e=%g,C=%g,g=%g)=%.3f"
+          !nlopt_iter !nlopt_best_r2 e c g curr_r2
+     );
+     incr nlopt_iter;
+     curr_r2
   | _ -> failwith "Svmwrap.nlopt_eval_solution: only Linear or RBF kernel"
 
 let nlopt_optimize_regr verbose max_evals kernel
-    (e_min, e_def, e_max)
-    (c_min, c_def, c_max)
-    (g_min, g_def, g_max) train test =
+      (e_min, e_def, e_max)
+      (c_min, c_def, c_max)
+      (g_min, g_def, g_max) train test =
   match kernel with
   | Linear ->
-    let ndims = 2 in (* for the linear kernel: e and C *)
-    (* local optimizer that will be passed to the global one *)
-    let local = Nlopt.(create sbplx ndims) in (* local optimizer: gradient-free *)
-    Nlopt.set_max_objective local
-      (nlopt_eval_solution verbose train test);
-    (* I don't set parameter bounds on the local optimizer, I guess
-     * the global optimizer handles this *)
-    (* hard/stupid stop conditions *)
-    Nlopt.set_stopval local 1.0; (* max R2 *)
-    (* smart stop conditions *)
-    Nlopt.set_ftol_abs local 0.0001; (* FBR: might need to be tweaked *)
-    let global = Nlopt.(create auglag ndims) in (* global optimizer *)
-    Nlopt.set_local_optimizer global local;
-    Nlopt.set_max_objective global
-      (nlopt_eval_solution verbose train test);
-    (* bounds for e and C *)
-    Nlopt.set_lower_bounds global [|e_min; c_min|];
-    Nlopt.set_upper_bounds global [|e_max; c_max|];
-    (* hard/stupid stop conditions *)
-    Nlopt.set_stopval global 1.0; (* max R2 *)
-    (* max number of single_train_test_regr calls *)
-    Nlopt.set_maxeval global max_evals;
-    (* not so stupid starting solution *)
-    let initial_guess = [|0.0; 1.0|] in
-    let stop_cond, params, r2 = Nlopt.optimize global initial_guess in
-    Log.info "NLopt optimize global: %s" (Nlopt.string_of_result stop_cond);
-    let e, c = params.(0), params.(1) in
-    (e, c, Linear, r2)
+     let ndims = 2 in (* for the linear kernel: e and C *)
+     (* local optimizer that will be passed to the global one *)
+     let local = Nlopt.(create sbplx ndims) in (* local optimizer: gradient-free *)
+     Nlopt.set_max_objective local
+       (nlopt_eval_solution verbose train test);
+     (* I don't set parameter bounds on the local optimizer, I guess
+      * the global optimizer handles this *)
+     (* hard/stupid stop conditions *)
+     Nlopt.set_stopval local 1.0; (* max R2 *)
+     (* smart stop conditions *)
+     Nlopt.set_ftol_abs local 0.0001; (* FBR: might need to be tweaked *)
+     let global = Nlopt.(create auglag ndims) in (* global optimizer *)
+     Nlopt.set_local_optimizer global local;
+     Nlopt.set_max_objective global
+       (nlopt_eval_solution verbose train test);
+     (* bounds for e and C *)
+     Nlopt.set_lower_bounds global [|e_min; c_min|];
+     Nlopt.set_upper_bounds global [|e_max; c_max|];
+     (* hard/stupid stop conditions *)
+     Nlopt.set_stopval global 1.0; (* max R2 *)
+     (* max number of single_train_test_regr calls *)
+     Nlopt.set_maxeval global max_evals;
+     (* not so stupid starting solution *)
+     let initial_guess = [|0.0; 1.0|] in
+     let stop_cond, params, r2 = Nlopt.optimize global initial_guess in
+     Log.info "NLopt optimize global: %s" (Nlopt.string_of_result stop_cond);
+     let e, c = params.(0), params.(1) in
+     (e, c, Linear, r2)
   | RBF _ ->
-    let ndims = 3 in (* for the RBF kernel: (e, C, g) *)
-    (* local optimizer that will be passed to the global one *)
-    let local = Nlopt.(create sbplx ndims) in (* local optimizer: gradient-free *)
-    Nlopt.set_max_objective local
-      (nlopt_eval_solution verbose train test);
-    (* I don't set parameter bounds on the local optimizer, I guess
-     * the global optimizer handles this *)
-    (* hard/stupid stop conditions *)
-    Nlopt.set_stopval local 1.0; (* max R2 *)
-    (* smart stop conditions *)
-    Nlopt.set_ftol_abs local 0.0001; (* FBR: might need to be tweaked *)
-    let global = Nlopt.(create auglag ndims) in (* global optimizer *)
-    Nlopt.set_local_optimizer global local;
-    Nlopt.set_max_objective global
-      (nlopt_eval_solution verbose train test);
-    (* bounds for e and C *)
-    Nlopt.set_lower_bounds global [|e_min; c_min; g_min|];
-    Nlopt.set_upper_bounds global [|e_max; c_max; g_max|];
-    (* hard/stupid stop conditions *)
-    Nlopt.set_stopval global 1.0; (* max R2 *)
-    (* max number of single_train_test_regr calls *)
-    Nlopt.set_maxeval global max_evals;
-    (* not so stupid starting solution *)
-    let initial_guess = [|e_def; c_def; g_def|] in
-    let stop_cond, params, r2 = Nlopt.optimize global initial_guess in
-    Log.info "NLopt optimize global: %s" (Nlopt.string_of_result stop_cond);
-    let e, c, g = params.(0), params.(1), params.(2) in
-    (e, c, RBF g, r2)
+     let ndims = 3 in (* for the RBF kernel: (e, C, g) *)
+     (* local optimizer that will be passed to the global one *)
+     let local = Nlopt.(create sbplx ndims) in (* local optimizer: gradient-free *)
+     Nlopt.set_max_objective local
+       (nlopt_eval_solution verbose train test);
+     (* I don't set parameter bounds on the local optimizer, I guess
+      * the global optimizer handles this *)
+     (* hard/stupid stop conditions *)
+     Nlopt.set_stopval local 1.0; (* max R2 *)
+     (* smart stop conditions *)
+     Nlopt.set_ftol_abs local 0.0001; (* FBR: might need to be tweaked *)
+     let global = Nlopt.(create auglag ndims) in (* global optimizer *)
+     Nlopt.set_local_optimizer global local;
+     Nlopt.set_max_objective global
+       (nlopt_eval_solution verbose train test);
+     (* bounds for e and C *)
+     Nlopt.set_lower_bounds global [|e_min; c_min; g_min|];
+     Nlopt.set_upper_bounds global [|e_max; c_max; g_max|];
+     (* hard/stupid stop conditions *)
+     Nlopt.set_stopval global 1.0; (* max R2 *)
+     (* max number of single_train_test_regr calls *)
+     Nlopt.set_maxeval global max_evals;
+     (* not so stupid starting solution *)
+     let initial_guess = [|e_def; c_def; g_def|] in
+     let stop_cond, params, r2 = Nlopt.optimize global initial_guess in
+     Log.info "NLopt optimize global: %s" (Nlopt.string_of_result stop_cond);
+     let e, c, g = params.(0), params.(1), params.(2) in
+     (e, c, RBF g, r2)
   | _ -> failwith "Svmwrap.nlopt_optimize_regr: only Linear or RBF kernel"
 
 (* like optimize_regr, but using NxCV *)
@@ -571,25 +571,25 @@ let normalize_line l =
   | [] -> failwith "Svmwrap.normalize_line: empty line"
   | [_label] -> failwith ("Svmwrap.normalize_line: no features: " ^ l)
   | label :: features ->
-    let sum = ref 0 in
-    let feat_vals =
-      L.rev_map (fun feat_val_str ->
-          Scanf.sscanf feat_val_str "%d:%d"
-            (fun feat value ->
+     let sum = ref 0 in
+     let feat_vals =
+       L.rev_map (fun feat_val_str ->
+           Scanf.sscanf feat_val_str "%d:%d"
+             (fun feat value ->
                sum := !sum + value;
                (feat, value))
-        ) features in
-    let feat_norm_vals =
-      let total = float !sum in
-      L.rev_map (fun (feat, value) ->
-          (feat, (float value) /. total)
-        ) feat_vals in
-    let buff = Buffer.create 1024 in
-    Buffer.add_string buff label;
-    L.iter (fun (feat, norm_val) ->
-        Printf.bprintf buff " %d:%g" feat norm_val
-      ) feat_norm_vals;
-    Buffer.contents buff
+         ) features in
+     let feat_norm_vals =
+       let total = float !sum in
+       L.rev_map (fun (feat, value) ->
+           (feat, (float value) /. total)
+         ) feat_vals in
+     let buff = Buffer.create 1024 in
+     Buffer.add_string buff label;
+     L.iter (fun (feat, norm_val) ->
+         Printf.bprintf buff " %d:%g" feat norm_val
+       ) feat_norm_vals;
+     Buffer.contents buff
 
 (* unit tests for normalize_line *)
 let () =
@@ -641,7 +641,7 @@ let atom_pairs_line_to_csv do_classification line =
        S.replace_chars semi_colon_to_space (S.chop ~l:1 ~r:1 features) in
      sprintf "%s%s" label_str (increment_feat_indexes features')
   | _ -> failwith ("Linwrap.atom_pairs_line_to_csv: cannot parse: " ^ line)
-  
+       
 let pairs_to_csv verbose do_classification pairs_fn =
   let tmp_csv_fn =
     Fn.temp_file ~temp_dir:"/tmp" "linwrap_pairs2csv_" ".csv" in
@@ -783,81 +783,81 @@ let count_active_decoys pairs fn =
 let decode_w_range pairs maybe_train_fn input_fn maybe_range_str =
   match maybe_range_str with
   | None ->
-    begin
-      let n_acts, n_decs =
-        match maybe_train_fn with
-        | Some train_fn -> count_active_decoys pairs train_fn
-        | None -> count_active_decoys pairs input_fn in
-      Utls.enforce (n_acts <= n_decs)
-        (sprintf "Svmwrap.decode_w_range: n_acts (%d) > n_decs (%d)"
-           n_acts n_decs);
-      let max_weight = (float n_decs) /. (float n_acts) in
-      Log.info "max weight: %g" max_weight;
-      L.frange 1.0 `To max_weight 10 (* default w range *)
-    end
+     begin
+       let n_acts, n_decs =
+         match maybe_train_fn with
+         | Some train_fn -> count_active_decoys pairs train_fn
+         | None -> count_active_decoys pairs input_fn in
+       Utls.enforce (n_acts <= n_decs)
+         (sprintf "Svmwrap.decode_w_range: n_acts (%d) > n_decs (%d)"
+            n_acts n_decs);
+       let max_weight = (float n_decs) /. (float n_acts) in
+       Log.info "max weight: %g" max_weight;
+       L.frange 1.0 `To max_weight 10 (* default w range *)
+     end
   | Some s ->
-    try Scanf.sscanf s "%f:%d:%f" (fun start nsteps stop ->
-        L.frange start `To stop nsteps)
-    with exn -> (Log.fatal "Svmwrap.decode_w_range: invalid string: %s"  s;
-                 raise exn)
+     try Scanf.sscanf s "%f:%d:%f" (fun start nsteps stop ->
+             L.frange start `To stop nsteps)
+     with exn -> (Log.fatal "Svmwrap.decode_w_range: invalid string: %s"  s;
+                  raise exn)
 
 let decode_e_range maybe_range_str = match maybe_range_str with
   | None -> None
   | Some s ->
-    try
-      Scanf.sscanf s "%f:%d:%f" (fun start nsteps stop ->
-          Some (L.frange start `To stop nsteps)
-        )
-    with exn -> (Log.fatal "Svmwrap.decode_e_range: invalid string: %s"  s;
-                 raise exn)
+     try
+       Scanf.sscanf s "%f:%d:%f" (fun start nsteps stop ->
+           Some (L.frange start `To stop nsteps)
+         )
+     with exn -> (Log.fatal "Svmwrap.decode_e_range: invalid string: %s"  s;
+                  raise exn)
 
 let decode_c_range (maybe_range_str: string option): float list =
   match maybe_range_str with
   | None -> (* default C range *)
-    [0.001; 0.002; 0.005;
-     0.01;  0.02;  0.05;
-     0.1;   0.2;   0.5;
-     1.;    2.;    5.;
-     10.;  20.;   50.]
+     [0.001; 0.002; 0.005;
+      0.01;  0.02;  0.05;
+      0.1;   0.2;   0.5;
+      1.;    2.;    5.;
+      10.;  20.;   50.]
   | Some range_str ->
-    L.map robust_float_of_string
-      (S.split_on_char ',' range_str)
+     L.map robust_float_of_string
+       (S.split_on_char ',' range_str)
 
 let decode_k_range (maybe_range_str: string option): int list =
   match maybe_range_str with
   | None ->
-    (* default k range *)
-    [1; 2; 5; 10; 20; 50]
+     (* default k range *)
+     [1; 2; 5; 10; 20; 50]
   | Some range_str ->
-    L.map int_of_string
-      (S.split_on_char ',' range_str)
+     L.map int_of_string
+       (S.split_on_char ',' range_str)
 
 let decode_g_range (maybe_range_str: string option): float list =
   match maybe_range_str with
   | None -> (* default gamma range *)
-    [0.00001; 0.00002; 0.00005;
-     0.0001;  0.0002;  0.0005;
-     0.001;   0.002;   0.005;
-     0.01;    0.02;    0.05;
-     0.1;     0.2;     0.5;
-     1.0;     2.0;     5.0; 10.0]
+     [0.00001; 0.00002; 0.00005;
+      0.0001;  0.0002;  0.0005;
+      0.001;   0.002;   0.005;
+      0.01;    0.02;    0.05;
+      0.1;     0.2;     0.5;
+      1.0;     2.0;     5.0; 10.0]
   | Some range_str ->
-    L.map robust_float_of_string
-      (S.split_on_char ',' range_str)
+     L.map robust_float_of_string
+       (S.split_on_char ',' range_str)
 
 let decode_r_range (maybe_range_str: string option): float list =
   match maybe_range_str with
   | None -> failwith "Svmwrap.decode_r_range: no default range"
   | Some range_str ->
-    L.map robust_float_of_string
-      (S.split_on_char ',' range_str)
+     L.map robust_float_of_string
+       (S.split_on_char ',' range_str)
 
 let decode_d_range (maybe_range_str: string option): int list =
   match maybe_range_str with
   | None -> failwith "Svmwrap.decode_d_range: no default range"
   | Some range_str ->
-    L.map int_of_string
-      (S.split_on_char ',' range_str)
+     L.map int_of_string
+       (S.split_on_char ',' range_str)
 
 (* (0 <= epsilon <= max_i(|y_i|)); according to:
    "Parameter Selection for Linear Support Vector Regression."
@@ -875,19 +875,19 @@ let epsilon_range maybe_epsilon maybe_esteps maybe_es train =
   match (maybe_epsilon, maybe_esteps, maybe_es) with
   | (None, None, Some es) -> es
   | (_, _, Some _) ->
-    failwith "Svmwrap.epsilon_range: (e or esteps) and --e-range"
+     failwith "Svmwrap.epsilon_range: (e or esteps) and --e-range"
   | (Some _, Some _, None) ->
-    failwith "Svmwrap.epsilon_range: both e and esteps"
+     failwith "Svmwrap.epsilon_range: both e and esteps"
   | (None, None, None) -> [0.1] (* svm-train's default for -p option *)
   | (Some e, None, None) -> [e]
   | (None, Some nsteps, None) ->
-    let train_pIC50s = L.map (get_pIC50 false) train in
-    let mini, maxi = L.min_max ~cmp:BatFloat.compare train_pIC50s in
-    let avg = L.favg train_pIC50s in
-    let std = Utls.stddev train_pIC50s in
-    Log.info "(min, avg+/-std, max): %.3f %.3f+/-%.3f %.3f"
-      mini avg std maxi;
-    svr_epsilon_range nsteps train_pIC50s
+     let train_pIC50s = L.map (get_pIC50 false) train in
+     let mini, maxi = L.min_max ~cmp:BatFloat.compare train_pIC50s in
+     let avg = L.favg train_pIC50s in
+     let std = Utls.stddev train_pIC50s in
+     Log.info "(min, avg+/-std, max): %.3f %.3f+/-%.3f %.3f"
+       mini avg std maxi;
+     svr_epsilon_range nsteps train_pIC50s
 
 let read_IC50s_from_train_fn pairs train_fn =
   LO.map train_fn (get_pIC50 pairs)
@@ -940,7 +940,7 @@ let extract_norm_params_AP_lines num_features lines =
             Ht.replace ht k (min prev_min v, max prev_max v)
           with Not_found -> Ht.add ht k (v, v)
         ) fp
-  ) lines;
+    ) lines;
   { global_min = !glob_min; global_max = !glob_max; min_max_ht = ht }
 
 (* scale values in [0:1] *)
@@ -976,9 +976,9 @@ let lines_of_file num_features pairs2csv do_classification normalize fn =
   if pairs2csv then
     match normalize with
     | Scaled ->
-      let norm_params =
-        extract_norm_params_AP_lines num_features all_lines in
-      L.map (apply_norm_params_AP_line norm_params) all_lines
+       let norm_params =
+         extract_norm_params_AP_lines num_features all_lines in
+       L.map (apply_norm_params_AP_line norm_params) all_lines
     | IWN -> L.map instance_wise_norm_AP_line all_lines
     | None -> L.map (atom_pairs_line_to_csv do_classification) all_lines
   else
@@ -1066,17 +1066,17 @@ let main () =
     ("Svmwrap.main: cannot load and save at the same time");
   let model_cmd =
     begin match CLI.get_string_opt ["-s"; "--save"] args with
-      | Some fn ->
-        let () =
-          Utls.enforce
-            (force || not (Sys.file_exists fn))
-            ("Svmwrap: file already exists: " ^ fn) in
-        Save_into fn
-      | None ->
-        begin match CLI.get_string_opt ["-l"; "--load"] args with
-          | Some fn -> Restore_from fn
-          | None -> Discard
-        end
+    | Some fn ->
+       let () =
+         Utls.enforce
+           (force || not (Sys.file_exists fn))
+           ("Svmwrap: file already exists: " ^ fn) in
+       Save_into fn
+    | None ->
+       begin match CLI.get_string_opt ["-l"; "--load"] args with
+       | Some fn -> Restore_from fn
+       | None -> Discard
+       end
     end in
   let ncores = CLI.get_int_def ["-np"] args 1 in
   let train_p = CLI.get_float_def ["-p"] args 0.8 in
@@ -1113,8 +1113,8 @@ let main () =
   let maybe_esteps = CLI.get_int_opt ["--scan-e"] args in
   let do_regression =
     CLI.get_set_bool ["--regr"] args ||
-    Opt.is_some maybe_epsilon || Opt.is_some maybe_esteps ||
-    Opt.is_some e_range_str in
+      Opt.is_some maybe_epsilon || Opt.is_some maybe_esteps ||
+        Opt.is_some e_range_str in
   let do_classification = not do_regression in
   let no_gnuplot = CLI.get_set_bool ["--no-plot"] args in
   let chosen_kernel =
@@ -1135,45 +1135,45 @@ let main () =
   let cs = match fixed_c with
     | Some c -> [c]
     | None ->
-      if scan_C || BatOption.is_some c_range_str then
-        decode_c_range c_range_str
-      else (* default value from svm-train documentation *)
-        [1.0] in
+       if scan_C || BatOption.is_some c_range_str then
+         decode_c_range c_range_str
+       else (* default value from svm-train documentation *)
+         [1.0] in
   (* gamma range is handled very similarly to C range *)
   let gs = match fixed_g with
     | Some g -> [g]
     | None ->
-      if scan_g || BatOption.is_some g_range_str then
-        decode_g_range g_range_str
-      else
-        [default_gamma] in
+       if scan_g || BatOption.is_some g_range_str then
+         decode_g_range g_range_str
+       else
+         [default_gamma] in
   (* r range; only used by the sigmoid and polynomial kernels *)
   let rs = match fixed_r with
     | Some r -> [r]
     | None ->
-      if BatOption.is_some r_range_str then
-        decode_r_range r_range_str
-      else (* default value from svm-train documentation *)
-        [0.0] in
+       if BatOption.is_some r_range_str then
+         decode_r_range r_range_str
+       else (* default value from svm-train documentation *)
+         [0.0] in
   (* d range; only used by the polynomial kernel *)
   let ds = match fixed_d with
     | Some d -> [d]
     | None ->
-      if BatOption.is_some d_range_str then
-        decode_d_range d_range_str
-      else (* default value from svm-train documentation *)
-        [3] in
+       if BatOption.is_some d_range_str then
+         decode_d_range d_range_str
+       else (* default value from svm-train documentation *)
+         [3] in
   (* e-range? *)
   let maybe_es = decode_e_range e_range_str in
   let kernels = match chosen_kernel with
     | Lin_K -> [Linear]
     | RBF_K -> L.map (fun g -> RBF g) gs
     | Sig_K ->
-      let grs = L.cartesian_product gs rs in
-      L.map (fun (g, r) -> Sigmoid (g, r)) grs
+       let grs = L.cartesian_product gs rs in
+       L.map (fun (g, r) -> Sigmoid (g, r)) grs
     | Pol_K ->
-      let grds = L.cartesian_product (L.cartesian_product gs rs) ds in
-      L.map (fun ((g, r), d) -> Polynomial (g, r, d)) grds in
+       let grds = L.cartesian_product (L.cartesian_product gs rs) ds in
+       L.map (fun ((g, r), d) -> Polynomial (g, r, d)) grds in
   let ws = [1.0] in (* we don't support scanning w yet *)
   (* scan k? *)
   let ks =
@@ -1186,26 +1186,26 @@ let main () =
   begin match model_cmd with
   | Restore_from models_fn ->
      if do_regression then
-      begin
-        prod_predict_regr verbose pairs models_fn input_fn output_fn;
-        let acts = read_IC50s_from_train_fn pairs input_fn in
-        let preds = read_IC50s_from_preds_fn pairs output_fn in
-        let r2 = Cpm.RegrStats.r2 acts preds in
-        let rmse = Cpm.RegrStats.rmse acts preds in
-        let title_str =
-          sprintf "N=%d R2=%.3f RMSE=%.3f T=%s"
-            (L.length preds) r2 rmse input_fn in
-        (if not no_gnuplot then
-           Gnuplot.regr_plot title_str acts preds
-        )
-      end
+       begin
+         prod_predict_regr verbose pairs models_fn input_fn output_fn;
+         let acts = read_IC50s_from_train_fn pairs input_fn in
+         let preds = read_IC50s_from_preds_fn pairs output_fn in
+         let r2 = Cpm.RegrStats.r2 acts preds in
+         let rmse = Cpm.RegrStats.rmse acts preds in
+         let title_str =
+           sprintf "N=%d R2=%.3f RMSE=%.3f T=%s"
+             (L.length preds) r2 rmse input_fn in
+         (if not no_gnuplot then
+            Gnuplot.regr_plot title_str acts preds
+         )
+       end
      else
        let model_fns = LO.lines_of_file models_fn in
        prod_predict ncores verbose pairs model_fns input_fn output_fn
-    | Save_into (_)
+  | Save_into (_)
     | Discard ->
-      match maybe_train_fn, maybe_valid_fn, maybe_test_fn with
-      | (None, None, None) ->
+     match maybe_train_fn, maybe_valid_fn, maybe_test_fn with
+     | (None, None, None) ->
         begin
           (* randomize lines *)
           let all_lines =
@@ -1218,56 +1218,56 @@ let main () =
           let train, test = L.takedrop train_card all_lines in
           if do_regression then
             begin
-          let best_e, best_c, best_K, best_r2 =
-            match maybe_nlopt with
-            | Some max_iter ->
-              let e_bounds =
-                let dep_vars = L.map (get_pIC50 false) all_lines in
-                let mini, maxi = epsilon_bounds dep_vars in
-                let default = 0.1 in
-                (mini, default, maxi) in
-              (* cf. "A Practical Guide to Support Vector Classification"
-               * Chih-Wei Hsu, Chih-Chung Chang, and Chih-Jen Lin; May 19, 2016
-               * for those ranges *)
-              let c_bounds = (2.0 ** -.5.0, 1.0, 2.0 ** 15.0) in
-              let g_bounds = (2.0 ** -.15.0, default_gamma, 2.0 ** 3.0) in
-              let e', c', k', r2' =
-                nlopt_optimize_regr
-                  verbose max_iter (L.hd kernels) e_bounds c_bounds g_bounds train test in
-              (e', c', k', r2')
-            | None ->
-              let epsilons =
-                epsilon_range maybe_epsilon maybe_esteps maybe_es train in
-              if nfolds <= 1 then
-                optimize_regr verbose ncores kernels epsilons cs train test
-              else
-                optimize_regr_nfolds
-                  ncores verbose nfolds kernels epsilons cs all_lines in
-          let actual, preds =
-            if nfolds <= 1 then
-              single_train_test_regr
-                verbose model_cmd best_K best_e best_c train test
-            else
-              let actual', preds' =
-                single_train_test_regr_nfolds
-                  verbose nfolds ncores best_K best_e best_c
-                  all_lines in
-              (actual', preds') in
-          (* dump to a .act_pred file  *)
-          let act_preds = L.combine actual preds in
-          let rmse = Cpm.RegrStats.rmse actual preds in
-          LO.with_out_file output_fn (fun out ->
-              L.iter (fun (act, pred) ->
-                  fprintf out "%f\t%f" act pred
-                ) act_preds
-            );
-          let title_str =
-            sprintf "nfolds=%d K=%s e=%g C=%g R2=%.3f RMSE=%.3f T=%s"
-              nfolds (human_readable_string_of_kernel best_K)
-              best_e best_c best_r2 rmse input_fn in
-          Log.info "%s" title_str;
-          if not no_gnuplot then
-            Gnuplot.regr_plot title_str actual preds
+              let best_e, best_c, best_K, best_r2 =
+                match maybe_nlopt with
+                | Some max_iter ->
+                   let e_bounds =
+                     let dep_vars = L.map (get_pIC50 false) all_lines in
+                     let mini, maxi = epsilon_bounds dep_vars in
+                     let default = 0.1 in
+                     (mini, default, maxi) in
+                   (* cf. "A Practical Guide to Support Vector Classification"
+                    * Chih-Wei Hsu, Chih-Chung Chang, and Chih-Jen Lin; May 19, 2016
+                    * for those ranges *)
+                   let c_bounds = (2.0 ** -.5.0, 1.0, 2.0 ** 15.0) in
+                   let g_bounds = (2.0 ** -.15.0, default_gamma, 2.0 ** 3.0) in
+                   let e', c', k', r2' =
+                     nlopt_optimize_regr
+                       verbose max_iter (L.hd kernels) e_bounds c_bounds g_bounds train test in
+                   (e', c', k', r2')
+                | None ->
+                   let epsilons =
+                     epsilon_range maybe_epsilon maybe_esteps maybe_es train in
+                   if nfolds <= 1 then
+                     optimize_regr verbose ncores kernels epsilons cs train test
+                   else
+                     optimize_regr_nfolds
+                       ncores verbose nfolds kernels epsilons cs all_lines in
+              let actual, preds =
+                if nfolds <= 1 then
+                  single_train_test_regr
+                    verbose model_cmd best_K best_e best_c train test
+                else
+                  let actual', preds' =
+                    single_train_test_regr_nfolds
+                      verbose nfolds ncores best_K best_e best_c
+                      all_lines in
+                  (actual', preds') in
+              (* dump to a .act_pred file  *)
+              let act_preds = L.combine actual preds in
+              let rmse = Cpm.RegrStats.rmse actual preds in
+              LO.with_out_file output_fn (fun out ->
+                  L.iter (fun (act, pred) ->
+                      fprintf out "%f\t%f" act pred
+                    ) act_preds
+                );
+              let title_str =
+                sprintf "nfolds=%d K=%s e=%g C=%g R2=%.3f RMSE=%.3f T=%s"
+                  nfolds (human_readable_string_of_kernel best_K)
+                  best_e best_c best_r2 rmse input_fn in
+              Log.info "%s" title_str;
+              if not no_gnuplot then
+                Gnuplot.regr_plot title_str actual preds
             end
           else (* do classification *)
             let best_c, best_w, best_k, best_auc =
@@ -1276,9 +1276,9 @@ let main () =
             Log.info "T=%s nfolds=%d C=%.3f w=%.3f k=%d AUC=%.3f"
               input_fn nfolds best_c best_w best_k best_auc
         end
-      | (Some _train_fn, Some _valid_fn, Some _test_fn) ->
+     | (Some _train_fn, Some _valid_fn, Some _test_fn) ->
         failwith "not implemented yet"
-      | _ ->
+     | _ ->
         failwith "Svmwrap: --train, --valid and --test: \
                   provide all three or none"
   end;
