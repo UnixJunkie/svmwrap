@@ -17,6 +17,7 @@ module L = BatList
 module LO = Line_oriented
 module Log = Dolog.Log
 module Opt = BatOption
+module PHT = Dokeysto_camltc.Db_camltc.RW
 module RNG = BatRandom.State
 module S = BatString
 
@@ -622,6 +623,147 @@ let prod_predict_regr verbose pairs model_fn test_fn output_fn =
       (sprintf "%s %s %s %s %s"
          svm_predict quiet_option test_fn model_fn output_fn)
 
+let atom_pairs_line_to_csv do_classification line =
+  (* Example for classification:
+   * "active<NAME>,pIC50,[feat:val;...]" -> "+1 feat:val ..."
+   * "<NAME>,pIC50,[feat:val;...]" -> "-1 feat:val ..." *)
+  match S.split_on_char ',' line with
+  | [name; pIC50; features] ->
+     let label_str =
+       if do_classification then
+         if S.starts_with name "active" then "+1" else "-1"
+       else (* regression *)
+         pIC50 in
+     assert(S.left features 1 = "[" && S.right features 1 = "]");
+     let semi_colon_to_space = function | ';' -> " "
+                                        | x -> (S.of_char x) in
+     let features' =
+       S.replace_chars semi_colon_to_space (S.chop ~l:1 ~r:1 features) in
+     sprintf "%s%s" label_str (increment_feat_indexes features')
+  | _ -> failwith ("Linwrap.atom_pairs_line_to_csv: cannot parse: " ^ line)
+  
+let pairs_to_csv verbose do_classification pairs_fn =
+  let tmp_csv_fn =
+    Fn.temp_file ~temp_dir:"/tmp" "linwrap_pairs2csv_" ".csv" in
+  (if verbose then Log.info "--pairs -> tmp CSV: %s" tmp_csv_fn);
+  LO.lines_to_file tmp_csv_fn
+    (LO.map pairs_fn
+       (atom_pairs_line_to_csv do_classification));
+  tmp_csv_fn
+
+let get_name_from_AP_line pairs l =
+  if pairs then
+    try
+      let name, _rest = S.split ~by:"," l in
+      name
+    with exn -> (Log.fatal "cannot parse: %s" l; raise exn)
+  else
+    "" (* not sure there is one in that case *)
+
+let prod_predict ncores verbose pairs model_fns test_fn output_fn =
+  let quiet_command =
+    if verbose then ""
+    else "2>&1 > /dev/null" in
+  let pred_fns =
+    Parany.Parmap.parfold ncores
+      (fun model_fn ->
+        let preds_fn =
+          Fn.temp_file ~temp_dir:"/tmp" "linwrap_preds_" ".txt" in
+        Log.info "preds_fn: %s" preds_fn;
+        let tmp_csv_fn =
+          if pairs then
+            let do_classification = true in
+            pairs_to_csv verbose do_classification test_fn
+          else
+            test_fn in
+        Utls.run_command ~debug:verbose
+          (* '-b 1' forces probabilist predictions instead of raw scores *)
+          (sprintf "%s -b 1 %s %s %s %s"
+             svm_predict tmp_csv_fn model_fn preds_fn quiet_command);
+        (* FBR: bug around here *)
+        (if pairs && not verbose then Sys.remove tmp_csv_fn);
+        preds_fn)
+      (fun acc preds_fn -> preds_fn :: acc)
+      [] model_fns in
+  (* all pred files should have this same number of predictions
+     plus a header line *)
+  let nb_rows = LO.count test_fn in
+  let card = 1 + nb_rows in
+  Utls.enforce
+    (L.for_all (fun fn -> card = (LO.count fn)) pred_fns)
+    "Linwrap.prod_predict: linwrap_preds_*.txt: different number of lines";
+  let tmp_pht_fn = Fn.temp_file ~temp_dir:"/tmp" "linwrap_" ".pht" in
+  let pht = PHT.create tmp_pht_fn in
+  Log.info "Persistent hash table file: %s" tmp_pht_fn;
+  let nb_models = L.length pred_fns in
+  begin match pred_fns with
+  | [] -> assert(false)
+  | pred_fn_01 :: other_pred_fns ->
+     begin
+       (* populate ht *)
+       Log.info "gathering %d models..." nb_models;
+       LO.iteri pred_fn_01 (fun k line ->
+           if k = 0 then
+             assert(line = "labels 1 -1") (* check header *)
+           else
+             let pred_act_p = pred_score_of_pred_line line in
+             let k_str = string_of_int k in
+             PHT.add pht k_str (Utls.marshal_to_string pred_act_p)
+         );
+       Sys.remove pred_fn_01;
+       (* accumulate *)
+       L.iteri (fun i pred_fn ->
+           Log.info "done: %d/%d" (i + 1) nb_models;
+           LO.iteri pred_fn (fun k line ->
+               if k = 0 then
+                 assert(line = "labels 1 -1") (* check header *)
+               else
+                 let pred_act_p = pred_score_of_pred_line line in
+                 let k_str = string_of_int k in
+                 let prev_v: float =
+                   Utls.unmarshal_from_string (PHT.find pht k_str) in
+                 PHT.replace pht k_str
+                   (Utls.marshal_to_string (pred_act_p +. prev_v))
+             );
+           Sys.remove pred_fn
+         ) other_pred_fns;
+       Log.info "done: %d/%d" nb_models nb_models
+     end
+  end;
+  (* write them to output file, averaged *)
+  LO.with_out_file output_fn (fun out ->
+      for i = 1 to nb_rows do
+        let k_str = string_of_int i in
+        let sum_preds: float =
+          Utls.unmarshal_from_string (PHT.find pht k_str) in
+        fprintf out "%g\n" (sum_preds /. (float nb_models))
+      done
+    );
+  PHT.close pht;
+  (* PHT.destroy pht; *)
+  (* the previous line would raise Failure("invalid operation")
+   * so we just remove the file instead *)
+  Sys.remove tmp_pht_fn;
+  if output_fn <> "/dev/stdout" then
+    (* compute AUC *)
+    let auc =
+      let test_lines = LO.lines_of_file test_fn in
+      let names = L.map (get_name_from_AP_line pairs) test_lines in
+      let true_labels = L.map (is_active pairs) test_lines in
+      let pred_scores =
+        L.map (fun l -> Scanf.sscanf l "%f" (fun x -> x))
+          (LO.lines_of_file output_fn) in
+      let score_labels = L.map SL.create (L.combine true_labels pred_scores) in
+      let name_scores = L.combine names pred_scores in
+      (* prepend score with mol. name *)
+      LO.with_out_file output_fn (fun out ->
+          L.iter (fun (name, pred_score) ->
+              fprintf out "%s\t%g\n" name pred_score
+            ) name_scores
+        );
+      ROC.auc score_labels in
+    Log.info "AUC: %.3f" auc
+
 let count_active_decoys pairs fn =
   let n_total = LO.length fn in
   let filter =
@@ -829,7 +971,7 @@ type normalization = IWN (* instance-wise normalization *)
                    | Scaled (* scaled to fall in [0:1] *)
                    | None
 
-let lines_of_file num_features pairs2csv normalize fn =
+let lines_of_file num_features pairs2csv do_classification normalize fn =
   let all_lines = LO.lines_of_file fn in
   if pairs2csv then
     match normalize with
@@ -838,7 +980,7 @@ let lines_of_file num_features pairs2csv normalize fn =
         extract_norm_params_AP_lines num_features all_lines in
       L.map (apply_norm_params_AP_line norm_params) all_lines
     | IWN -> L.map instance_wise_norm_AP_line all_lines
-    | None -> L.map atom_pairs_line_to_csv all_lines
+    | None -> L.map (atom_pairs_line_to_csv do_classification) all_lines
   else
     match normalize with
     | Scaled -> failwith "Svmwrap.lines_of_file: \
@@ -900,6 +1042,10 @@ let main () =
               (example='0.01,0.02,0.03')\n  \
               [--g-range <float,float,...>] explicit range for gamma \n  \
               (example='0.01,0.02,0.03')\n  \
+              [--scan-k]: scan number of bags\n  \
+              [--k-range <int,int,...>] explicit scan range for k \n  \
+              (example='1,2,3,5,10')\n  \
+              [-k <int>]: explicit value for k\n  \
               [--r-range <float,float,...>] explicit range for r \n  \
               (example='0.01,0.02,0.03')\n"
        Sys.argv.(0);
@@ -945,6 +1091,9 @@ let main () =
   let fixed_g = CLI.get_float_opt ["-g"] args in
   let fixed_r = CLI.get_float_opt ["-r"] args in
   let fixed_d = CLI.get_int_opt ["-d"] args in
+  let fixed_k = CLI.get_int_opt ["-k"] args in
+  let scan_k = CLI.get_set_bool ["--scan-k"] args in
+  let k_range_str = CLI.get_string_opt ["--k-range"] args in
   let e_range_str = CLI.get_string_opt ["--e-range"] args in
   let c_range_str = CLI.get_string_opt ["--c-range"] args in
   let g_range_str = CLI.get_string_opt ["--g-range"] args in
@@ -962,6 +1111,11 @@ let main () =
     | false, false -> None in
   let maybe_epsilon = CLI.get_float_opt ["-e"] args in
   let maybe_esteps = CLI.get_int_opt ["--scan-e"] args in
+  let do_regression =
+    CLI.get_set_bool ["--regr"] args ||
+    Opt.is_some maybe_epsilon || Opt.is_some maybe_esteps ||
+    Opt.is_some e_range_str in
+  let do_classification = not do_regression in
   let no_gnuplot = CLI.get_set_bool ["--no-plot"] args in
   let chosen_kernel =
     let default_kernel_str = "Lin" in
@@ -1020,8 +1174,18 @@ let main () =
     | Pol_K ->
       let grds = L.cartesian_product (L.cartesian_product gs rs) ds in
       L.map (fun ((g, r), d) -> Polynomial (g, r, d)) grds in
+  let ws = [1.0] in (* we don't support scanning w yet *)
+  (* scan k? *)
+  let ks =
+    if scan_k || BatOption.is_some k_range_str then
+      decode_k_range k_range_str
+    else match fixed_k with
+         | Some k -> [k]
+         | None -> [1] in
+  let cwks = L.cartesian_product (L.cartesian_product cs ws) ks in
   begin match model_cmd with
-    | Restore_from models_fn ->
+  | Restore_from models_fn ->
+     if do_regression then
       begin
         prod_predict_regr verbose pairs models_fn input_fn output_fn;
         let acts = read_IC50s_from_train_fn pairs input_fn in
@@ -1035,6 +1199,9 @@ let main () =
            Gnuplot.regr_plot title_str acts preds
         )
       end
+     else
+       let model_fns = LO.lines_of_file models_fn in
+       prod_predict ncores verbose pairs model_fns input_fn output_fn
     | Save_into (_)
     | Discard ->
       match maybe_train_fn, maybe_valid_fn, maybe_test_fn with
@@ -1043,12 +1210,14 @@ let main () =
           (* randomize lines *)
           let all_lines =
             L.shuffle ~state:rng
-              (lines_of_file num_features pairs normalize input_fn) in
+              (lines_of_file num_features pairs do_classification normalize input_fn) in
           let nb_lines = L.length all_lines in
           (* partition *)
           let train_card =
             BatFloat.round_to_int (train_p *. (float nb_lines)) in
           let train, test = L.takedrop train_card all_lines in
+          if do_regression then
+            begin
           let best_e, best_c, best_K, best_r2 =
             match maybe_nlopt with
             | Some max_iter ->
@@ -1099,6 +1268,13 @@ let main () =
           Log.info "%s" title_str;
           if not no_gnuplot then
             Gnuplot.regr_plot title_str actual preds
+            end
+          else (* do classification *)
+            let best_c, best_w, best_k, best_auc =
+              optimize ncores verbose no_gnuplot nfolds
+                model_cmd rng train test cwks in
+            Log.info "T=%s nfolds=%d C=%.3f w=%.3f k=%d AUC=%.3f"
+              input_fn nfolds best_c best_w best_k best_auc
         end
       | (Some _train_fn, Some _valid_fn, Some _test_fn) ->
         failwith "not implemented yet"
