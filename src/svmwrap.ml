@@ -20,6 +20,18 @@ module Opt = BatOption
 module RNG = BatRandom.State
 module S = BatString
 
+module SL = struct
+  type t = bool * float (* (label, pred_score) *)
+  let create (l, s) =
+    (l, s)
+  let get_score (_l, s) =
+    s
+  let get_label (l, _s) =
+    l
+end
+
+module ROC = Cpm.MakeROC.Make(SL)
+
 (* float_of_string doesn't parse the scientific notation ! *)
 let robust_float_of_string s =
   try Scanf.sscanf s "%f" (fun x -> x)
@@ -56,12 +68,21 @@ let get_pIC50 pairs s =
     with exn -> (Log.error "Svmwrap.get_pIC50 pairs: cannot parse: %s" s;
                  raise exn)
   else
-    (* the sparse data file format for liblinear starts with the
+    (* the sparse data file format for libsvm starts with the
      * target_float_val as the first field followed by
        idx:val space-separated FP values *)
     try Scanf.sscanf s "%f %s" (fun pIC50 _features -> pIC50)
     with exn -> (Log.error "Svmwrap.get_pIC50: cannot parse: %s" s;
                  raise exn)
+
+let pred_score_of_pred_line l =
+  try Scanf.sscanf l "%d %f %f" (fun _label act_p _dec_p -> act_p)
+  with exn ->
+    (Log.fatal "Svmwrap.pred_score_of_pred_line: cannot parse: %s" l;
+     raise exn)
+
+let is_active pairs s =
+  S.starts_with s (if pairs then "active" else "+1 ")
 
 (* what to do with the created models *)
 type model_command = Restore_from of Utls.filename
@@ -69,6 +90,7 @@ type model_command = Restore_from of Utls.filename
                    | Discard
 
 let epsilon_SVR = 3 (* cf. svm-train manpage *)
+let c_SVC = 0
 
 (* (0 <= epsilon <= max_i(|y_i|)); according to:
    "Parameter Selection for Linear Support Vector Regression."
@@ -102,13 +124,60 @@ let human_readable_string_of_kernel = function
   | Sigmoid (g, r) -> sprintf "Sig(%g,%g)" g r
   | Polynomial (g, r, d) -> sprintf "Pol(%g,%g,%d)" g r d
 
+let single_train_test verbose pairs cmd c w train test =
+  let quiet_command = if verbose then "" else "-q" in
+  (* train *)
+  let train_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_train_" ".txt" in
+  LO.lines_to_file train_fn train;
+  let replaced, model_fn =
+    (* libsvm places the model in the current working dir... *)
+    S.replace ~str:(train_fn ^ ".model") ~sub:"/tmp/" ~by:"" in
+  assert(replaced);
+  let w_str = if w <> 1.0 then sprintf " -w1 %g" w else "" in
+  Utls.run_command ~debug:verbose
+    (sprintf "%s %s -c %g%s -s %d %s"
+       svm_train quiet_command c w_str c_SVC train_fn);
+  (* test *)
+  let test_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_test_" ".txt" in
+  LO.lines_to_file test_fn test;
+  let preds_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_preds_" ".txt" in
+  (* compute AUC on test set *)
+  Utls.run_command ~debug:verbose
+    (* '-b 1' forces probabilist predictions instead of raw scores *)
+    (sprintf "%s %s -b 1 %s %s %s"
+       svm_predict quiet_command test_fn model_fn preds_fn);
+  (* extract true labels *)
+  let true_labels = L.map (is_active pairs) test in
+  (* extact predicted scores *)
+  let pred_lines = LO.lines_of_file preds_fn in
+  begin match cmd with
+  | Restore_from _ -> assert(false) (* not dealt with here *)
+  | Discard ->
+     if not verbose then
+       L.iter (Sys.remove) [train_fn; test_fn; preds_fn; model_fn]
+  | Save_into models_fn ->
+     (Utls.run_command (sprintf "echo %s >> %s" model_fn models_fn);
+      if not verbose then
+        L.iter (Sys.remove) [train_fn; test_fn; preds_fn])
+  end;
+  match pred_lines with
+  | header :: preds ->
+     begin
+       (if header <> "labels 1 -1" then
+          Log.warn "Svmwrap.single_train_test: wrong header in preds_fn: %s"
+            header);
+       let pred_scores = L.map pred_score_of_pred_line preds in
+       L.map SL.create (L.combine true_labels pred_scores)
+     end
+  | _ -> assert(false)
+
 let single_train_test_regr verbose cmd kernel e c train test =
   let quiet_option = if not verbose then "-q" else "" in
   (* train *)
   let train_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_train_" ".txt" in
   LO.lines_to_file train_fn train;
   let replaced, model_fn =
-    (* liblinear places the model in the current working dir... *)
+    (* libsvm places the model in the current working dir... *)
     S.replace ~str:(train_fn ^ ".model") ~sub:"/tmp/" ~by:"" in
   assert(replaced);
   let kernel_str = string_of_kernel kernel in
@@ -146,7 +215,7 @@ let single_train_test_regr verbose cmd kernel e c train test =
   let pred_values = L.map robust_float_of_string pred_lines in
   (actual_values, pred_values)
 
-(* liblinear wants first feature index=1 instead of 0 *)
+(* libsvm wants first feature index=1 instead of 0 *)
 (* FBR: bug in case there are no features *)
 let increment_feat_indexes features =
   let buff = Buffer.create 1024 in
@@ -165,7 +234,7 @@ let increment_feat_indexes features =
      (L.length feat_vals) features res; *)
   Buffer.contents buff
 
-(* liblinear line format:
+(* libsvm line format:
    '-80.56 1:7 2:5 3:8 4:5 5:5 6:4 7:6 8:3 9:5 10:4 11:2'
    molenc line format:
    'molname,-75.63,[0:4;1:4;2:5;3:2;4:3;5:2;6:2;7:2]' *)
@@ -514,10 +583,10 @@ let decode_c_range (maybe_range_str: string option): float list =
   match maybe_range_str with
   | None -> (* default C range *)
     [0.001; 0.002; 0.005;
-     0.01; 0.02; 0.05;
-     0.1; 0.2; 0.5;
-     1.; 2.; 5.;
-     10.; 20.; 50.]
+     0.01;  0.02;  0.05;
+     0.1;   0.2;   0.5;
+     1.;    2.;    5.;
+     10.;  20.;   50.]
   | Some range_str ->
     L.map robust_float_of_string
       (S.split_on_char ',' range_str)
