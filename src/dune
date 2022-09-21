@@ -3,4 +3,4 @@
   (names        svmwrap)
   (public_names svmwrap)
   (libraries batteries cpm dolog minicli parany molenc line_oriented nlopt)
-  (modules utls svmwrap gnuplot))
+  (modules utls svmwrap gnuplot perf))
