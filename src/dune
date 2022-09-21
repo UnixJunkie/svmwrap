@@ -2,5 +2,5 @@
 (executables
   (names        svmwrap)
   (public_names svmwrap)
-  (libraries batteries cpm dolog minicli parany molenc line_oriented nlopt)
+  (libraries batteries cpm dolog minicli parany molenc line_oriented nlopt dokeysto_camltc)
   (modules utls svmwrap gnuplot perf))
