@@ -313,11 +313,11 @@ let log_R2 e c kernel r2 =
    else Log.info) "(e,C,K,R2) = %g %g %s %.3f"
     e c (human_readable_string_of_kernel kernel) r2
 
-let log_AUC kernel c auc =
+let log_AUC kernel c k auc =
   (if auc < 0.5 then Log.error
    else if auc < 0.6 then Log.warn
-   else Log.info) "(K,C,AUC) = %s %g %.3f"
-    (human_readable_string_of_kernel kernel) c auc
+   else Log.info) "(K,C,k,AUC) = %s %g %d %.3f"
+    (human_readable_string_of_kernel kernel) c k auc
 
 (* return the best parameter configuration (epsilon, C, kernel) found *)
 let optimize_regr verbose ncores kernels es cs train test =
@@ -415,16 +415,12 @@ let optimize ncores verbose noplot nfolds model_cmd
          perf_plot noplot for_auc c' k' auc bed;
          (kernel, c', k', auc))
       (fun
-        ((_kernel, _c, _k, prev_best_auc) as prev)
-        ((kernel', c', k', curr_auc) as curr) ->
-        if curr_auc > prev_best_auc then
-          (Log.info "K:%s c: %g k: %d AUC: %.3f"
-             (human_readable_string_of_kernel kernel') c' k' curr_auc;
-           curr)
-        else
-          (Log.warn "K:%s c: %g k: %d AUC: %.3f"
-             (human_readable_string_of_kernel kernel') c' k' curr_auc;
-           prev)
+        ((_kernel, _c, _k, auc) as prev)
+        ((kernel', c', k', auc') as curr) ->
+        log_AUC kernel' c' k' auc';
+        if auc' > auc then
+          curr
+        else prev
       ) (Linear, -1.0, -1, 0.0) params
 
 (* variables to monitor NLopt optimization progress *)
