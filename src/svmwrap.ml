@@ -1176,7 +1176,6 @@ let main () =
     | Pol_K ->
       let grds = L.cartesian_product (L.cartesian_product gs rs) ds in
       L.map (fun ((g, r), d) -> Polynomial (g, r, d)) grds in
-  (* FBR: remove w-scan related options in CLI parsing *)
   (* scan k? *)
   let ks =
     if scan_k || BatOption.is_some k_range_str then
