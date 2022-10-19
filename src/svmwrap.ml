@@ -126,8 +126,9 @@ let human_readable_string_of_kernel = function
   | Sigmoid (g, r) -> sprintf "Sig(%g,%g)" g r
   | Polynomial (g, r, d) -> sprintf "Pol(%g,%g,%d)" g r d
 
-let single_train_test verbose pairs cmd kernel c train test =
+let single_train_test verbose no_shrink pairs cmd kernel c train test =
   let quiet_command = if verbose then "" else "-q" in
+  let shrink_heuristic = if no_shrink then "-h 0" else "" in
   (* train *)
   let train_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_train_" ".txt" in
   LO.lines_to_file train_fn train;
@@ -138,8 +139,8 @@ let single_train_test verbose pairs cmd kernel c train test =
   let kernel_str = string_of_kernel kernel in
   Utls.run_command ~debug:verbose
     (* -b 1: probability estimates *)
-    (sprintf "%s %s -b 1 %s -c %g -s %d %s"
-       svm_train quiet_command kernel_str c c_SVC train_fn);
+    (sprintf "%s %s %s -b 1 %s -c %g -s %d %s"
+       svm_train quiet_command shrink_heuristic kernel_str c c_SVC train_fn);
   (* test *)
   let test_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_test_" ".txt" in
   LO.lines_to_file test_fn test;
@@ -174,8 +175,9 @@ let single_train_test verbose pairs cmd kernel c train test =
     end
   | _ -> assert(false)
 
-let single_train_test_regr verbose cmd kernel e c train test =
+let single_train_test_regr verbose no_shrink cmd kernel e c train test =
   let quiet_option = if not verbose then "-q" else "" in
+  let shrink_heuristic = if no_shrink then "-h 0" else "" in
   (* train *)
   let train_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_train_" ".txt" in
   LO.lines_to_file train_fn train;
@@ -185,8 +187,8 @@ let single_train_test_regr verbose cmd kernel e c train test =
   assert(replaced);
   let kernel_str = string_of_kernel kernel in
   Utls.run_command ~debug:verbose
-    (sprintf "%s %s -s %d %s -c %g -p %g %s %s"
-       svm_train quiet_option epsilon_SVR kernel_str c e train_fn model_fn);
+    (sprintf "%s %s %s -s %d %s -c %g -p %g %s %s"
+       svm_train quiet_option shrink_heuristic epsilon_SVR kernel_str c e train_fn model_fn);
   (* test *)
   let test_fn = Fn.temp_file ~temp_dir:"/tmp" "svmwrap_test_" ".txt" in
   LO.lines_to_file test_fn test;
@@ -320,12 +322,12 @@ let log_AUC kernel c k auc =
     (human_readable_string_of_kernel kernel) c k auc
 
 (* return the best parameter configuration (epsilon, C, kernel) found *)
-let optimize_regr verbose ncores kernels es cs train test =
+let optimize_regr verbose no_shrink ncores kernels es cs train test =
   let ecks = L.cartesian_product (L.cartesian_product es cs) kernels in
   let e_c_k_r2s =
     Parany.Parmap.parmap ncores (fun ((e, c), kernel) ->
         let act, preds =
-          single_train_test_regr verbose Discard kernel e c train test in
+          single_train_test_regr verbose no_shrink Discard kernel e c train test in
         let r2 = Cpm.RegrStats.r2 act preds in
         log_R2 e c kernel r2;
         (e, c, kernel, r2)
@@ -358,31 +360,31 @@ let balanced_bag pairs rng lines =
   A.shuffle ~state:rng tmp_a; (* randomize selected lines order *)
   A.to_list tmp_a
 
-let train_test ncores verbose pairs cmd kernel rng c k train test =
+let train_test ncores verbose no_shrink pairs cmd kernel rng c k train test =
   if k <= 1 then
     (* we don't use bagging then *)
-    single_train_test verbose pairs cmd kernel c train test
+    single_train_test verbose no_shrink pairs cmd kernel c train test
   else (* k > 1 *)
     let bags = L.init k (fun _ -> balanced_bag pairs rng train) in
     let k_score_labels =
       Parany.Parmap.parmap ncores (fun bag ->
-          single_train_test verbose pairs cmd kernel c bag test
+          single_train_test verbose no_shrink pairs cmd kernel c bag test
         ) bags in
     average_scores k k_score_labels
 
-let nfolds_train_test ncores verbose pairs cmd kernel rng c k n dataset =
+let nfolds_train_test ncores verbose no_shrink pairs cmd kernel rng c k n dataset =
   assert(n > 1);
   L.flatten
     (L.map (fun (train, test) ->
-         train_test ncores verbose pairs cmd kernel rng c k train test
+         train_test ncores verbose no_shrink pairs cmd kernel rng c k train test
        ) (Cpm.Utls.cv_folds n dataset))
 
 let train_test_maybe_nfolds
-    ncores nfolds verbose model_cmd kernel rng c' k' train test =
+    ncores nfolds verbose no_shrink model_cmd kernel rng c' k' train test =
   if nfolds <= 1 then
-    train_test ncores verbose false model_cmd kernel rng c' k' train test
+    train_test ncores verbose no_shrink false model_cmd kernel rng c' k' train test
   else (* nfolds > 1 *)
-    nfolds_train_test ncores verbose false model_cmd kernel rng c' k' nfolds
+    nfolds_train_test ncores verbose no_shrink false model_cmd kernel rng c' k' nfolds
       (L.rev_append train test)
 
 let perf_plot noplot score_labels c' k' auc bed =
@@ -396,7 +398,7 @@ let perf_plot noplot score_labels c' k' auc bed =
 
 (* return the best parameter configuration found in the parameter
    configs list [cks]: (best_K, best_c, best_k, best_auc) *)
-let optimize ncores verbose noplot nfolds model_cmd
+let optimize ncores verbose no_shrink noplot nfolds model_cmd
     kernels rng train test (cks: (float * int) list) =
   match cks with
   | [] -> assert(false) (* there should be at least one configuration *)
@@ -407,7 +409,7 @@ let optimize ncores verbose noplot nfolds model_cmd
          let for_auc =
            let score_labels =
              train_test_maybe_nfolds
-               1 nfolds verbose model_cmd kernel rng c' k' train test in
+               1 nfolds verbose no_shrink model_cmd kernel rng c' k' train test in
            A.of_list score_labels in
          ROC.rank_order_by_score_a for_auc;
          let auc = ROC.fast_auc_a for_auc in
@@ -432,13 +434,13 @@ let nlopt_reset_iter_and_r2 () =
   nlopt_best_r2 := 0.0
 
 (* we don't have a gradient --> _gradient *)
-let nlopt_eval_solution verbose train test params _gradient =
+let nlopt_eval_solution verbose no_shrink train test params _gradient =
   match A.length params with
   | 2 ->
     let e = params.(0) in
     let c = params.(1) in
     let act, preds =
-      single_train_test_regr verbose Discard Linear e c train test in
+      single_train_test_regr verbose no_shrink Discard Linear e c train test in
     let curr_r2 = Cpm.RegrStats.r2 act preds in
     nlopt_best_r2 := max !nlopt_best_r2 curr_r2; (* best R2 seen up to now *)
     (if verbose || !nlopt_iter mod 10 = 0 then
@@ -452,7 +454,7 @@ let nlopt_eval_solution verbose train test params _gradient =
     let c = params.(1) in
     let g = params.(2) in
     let act, preds =
-      single_train_test_regr verbose Discard (RBF g) e c train test in
+      single_train_test_regr verbose no_shrink Discard (RBF g) e c train test in
     let curr_r2 = Cpm.RegrStats.r2 act preds in
     nlopt_best_r2 := max !nlopt_best_r2 curr_r2; (* best R2 seen up to now *)
     (if verbose || !nlopt_iter mod 10 = 0 then
@@ -463,7 +465,7 @@ let nlopt_eval_solution verbose train test params _gradient =
     curr_r2
   | _ -> failwith "Svmwrap.nlopt_eval_solution: only Linear or RBF kernel"
 
-let nlopt_optimize_regr verbose max_evals kernel
+let nlopt_optimize_regr verbose no_shrink max_evals kernel
     (e_min, e_def, e_max)
     (c_min, c_def, c_max)
     (g_min, g_def, g_max) train test =
@@ -473,7 +475,7 @@ let nlopt_optimize_regr verbose max_evals kernel
     (* local optimizer that will be passed to the global one *)
     let local = Nlopt.(create sbplx ndims) in (* local optimizer: gradient-free *)
     Nlopt.set_max_objective local
-      (nlopt_eval_solution verbose train test);
+      (nlopt_eval_solution verbose no_shrink train test);
     (* I don't set parameter bounds on the local optimizer, I guess
      * the global optimizer handles this *)
     (* hard/stupid stop conditions *)
@@ -483,7 +485,7 @@ let nlopt_optimize_regr verbose max_evals kernel
     let global = Nlopt.(create auglag ndims) in (* global optimizer *)
     Nlopt.set_local_optimizer global local;
     Nlopt.set_max_objective global
-      (nlopt_eval_solution verbose train test);
+      (nlopt_eval_solution verbose no_shrink train test);
     (* bounds for e and C *)
     Nlopt.set_lower_bounds global [|e_min; c_min|];
     Nlopt.set_upper_bounds global [|e_max; c_max|];
@@ -502,7 +504,7 @@ let nlopt_optimize_regr verbose max_evals kernel
     (* local optimizer that will be passed to the global one *)
     let local = Nlopt.(create sbplx ndims) in (* local optimizer: gradient-free *)
     Nlopt.set_max_objective local
-      (nlopt_eval_solution verbose train test);
+      (nlopt_eval_solution verbose no_shrink train test);
     (* I don't set parameter bounds on the local optimizer, I guess
      * the global optimizer handles this *)
     (* hard/stupid stop conditions *)
@@ -512,7 +514,7 @@ let nlopt_optimize_regr verbose max_evals kernel
     let global = Nlopt.(create auglag ndims) in (* global optimizer *)
     Nlopt.set_local_optimizer global local;
     Nlopt.set_max_objective global
-      (nlopt_eval_solution verbose train test);
+      (nlopt_eval_solution verbose no_shrink train test);
     (* bounds for e and C *)
     Nlopt.set_lower_bounds global [|e_min; c_min; g_min|];
     Nlopt.set_upper_bounds global [|e_max; c_max; g_max|];
@@ -529,7 +531,7 @@ let nlopt_optimize_regr verbose max_evals kernel
   | _ -> failwith "Svmwrap.nlopt_optimize_regr: only Linear or RBF kernel"
 
 (* like optimize_regr, but using NxCV *)
-let optimize_regr_nfolds ncores verbose nfolds kernels es cs train =
+let optimize_regr_nfolds ncores verbose no_shrink nfolds kernels es cs train =
   let train_tests = Cpm.Utls.cv_folds nfolds train in
   let ecks = L.cartesian_product (L.cartesian_product es cs) kernels in
   let n_configs = L.length ecks in
@@ -543,7 +545,7 @@ let optimize_regr_nfolds ncores verbose nfolds kernels es cs train =
     configs_mapper (fun ((e, c), kernel) ->
         let all_act_preds =
           folds_mapper (fun (train', test') ->
-              single_train_test_regr verbose Discard kernel e c train' test'
+              single_train_test_regr verbose no_shrink Discard kernel e c train' test'
             ) train_tests in
         let acts, preds =
           let xs, ys = L.split all_act_preds in
@@ -554,12 +556,12 @@ let optimize_regr_nfolds ncores verbose nfolds kernels es cs train =
       ) ecks in
   best_r2 e_c_k_r2s
 
-let single_train_test_regr_nfolds verbose nfolds nprocs kernel e c train =
+let single_train_test_regr_nfolds verbose no_shrink nfolds nprocs kernel e c train =
   let train_tests = Cpm.Utls.cv_folds nfolds train in
   let all_act_preds =
     Parany.Parmap.parmap nprocs (fun (train', test') ->
         let acts, preds =
-          single_train_test_regr verbose Discard kernel e c train' test' in
+          single_train_test_regr verbose no_shrink Discard kernel e c train' test' in
         (acts, preds)
       ) train_tests in
   let xs, ys = L.split all_act_preds in
@@ -1023,6 +1025,7 @@ let main () =
               [--no-plot]: no gnuplot\n  \
               [{-n|--NxCV} <int>]: folds of cross validation\n  \
               [-q]: quiet\n  \
+              [--no-shrink]: disable svm-train shrinking heuristic\n  \
               [-v|--verbose]: equivalent to not specifying -q\n  \
               [--seed <int>]: fix random seed\n  \
               [-p <float>]: training set portion (in [0.0:1.0])\n  \
@@ -1102,6 +1105,7 @@ let main () =
   let r_range_str = CLI.get_string_opt ["--r-range"] args in
   let d_range_str = CLI.get_string_opt ["--d-range"] args in
   let quiet = CLI.get_set_bool ["-q"] args in
+  let no_shrink = CLI.get_set_bool ["--no-shrink"] args in
   let maybe_nlopt = CLI.get_int_opt ["--nlopt"] args in
   let verbose = (not quiet) || (CLI.get_set_bool ["-v";"--verbose"] args) in
   let normalize =
@@ -1235,25 +1239,25 @@ let main () =
                   let g_bounds = (2.0 ** -.15.0, default_gamma, 2.0 ** 3.0) in
                   let e', c', k', r2' =
                     nlopt_optimize_regr
-                      verbose max_iter (L.hd kernels) e_bounds c_bounds
+                      verbose no_shrink max_iter (L.hd kernels) e_bounds c_bounds
                       g_bounds train test in
                   (e', c', k', r2')
                 | None ->
                   let epsilons =
                     epsilon_range maybe_epsilon maybe_esteps maybe_es train in
                   if nfolds <= 1 then
-                    optimize_regr verbose ncores kernels epsilons cs train test
+                    optimize_regr verbose no_shrink ncores kernels epsilons cs train test
                   else
                     optimize_regr_nfolds
-                      ncores verbose nfolds kernels epsilons cs all_lines in
+                      ncores verbose no_shrink nfolds kernels epsilons cs all_lines in
               let actual, preds =
                 if nfolds <= 1 then
                   single_train_test_regr
-                    verbose model_cmd best_K best_e best_c train test
+                    verbose no_shrink model_cmd best_K best_e best_c train test
                 else
                   let actual', preds' =
                     single_train_test_regr_nfolds
-                      verbose nfolds ncores best_K best_e best_c
+                      verbose no_shrink nfolds ncores best_K best_e best_c
                       all_lines in
                   (actual', preds') in
               (* dump to a .act_pred file  *)
@@ -1274,7 +1278,7 @@ let main () =
             end
           else (* do classification *)
             let best_K, best_c, best_k, best_auc =
-              optimize ncores verbose no_gnuplot nfolds
+              optimize ncores verbose no_shrink no_gnuplot nfolds
                 model_cmd kernels rng train test cks in
             Log.info "T=%s nfolds=%d K=%s C=%.3f k=%d AUC=%.3f"
               input_fn nfolds (human_readable_string_of_kernel best_K)
