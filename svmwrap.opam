@@ -18,7 +18,8 @@ depends: [
   "parany" {>= "11.0.0"}
   "line_oriented" {>= "1.2.0"}
   "nlopt"
-  "dokeysto_camltc"
+  "dokeysto" # dokeysto_camltc not yet compiling w/ ocaml-5
+  "ocaml" {>= "5.0.0"} # possible perf. regr.: dokeysto_camltc -> dokeysto
 ]
 # the software can compile and install without the depopts.
 # however, some tools and options will not work anymore at run-time

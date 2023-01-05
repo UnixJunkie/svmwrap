@@ -17,7 +17,7 @@ module L = BatList
 module LO = Line_oriented
 module Log = Dolog.Log
 module Opt = BatOption
-module PHT = Dokeysto_camltc.Db_camltc.RW
+module PHT = Dokeysto.Db.RW
 module RNG = BatRandom.State
 module S = BatString
 
